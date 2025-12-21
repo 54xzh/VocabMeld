@@ -112,6 +112,24 @@
     return 'en';
   }
 
+  function isBilibiliVideoPage() {
+    const host = (window.location.hostname || '').toLowerCase();
+    if (!/(^|\.)bilibili\.com$/.test(host)) return false;
+    return (window.location.pathname || '').startsWith('/video/');
+  }
+
+  function isLikelyBilibiliCommentContainer(element) {
+    if (!isBilibiliVideoPage() || !element?.tagName) return false;
+    let current = element;
+    for (let i = 0; current && i < 10; i++) {
+      const id = (current.id || '').toLowerCase();
+      const cls = (current.className || '').toString().toLowerCase();
+      if (id.includes('comment') || cls.includes('comment') || cls.includes('reply')) return true;
+      current = current.parentElement;
+    }
+    return false;
+  }
+
   // 判断检测到的语言是否与用户设置的母语匹配
   function isNativeLanguage(detectedLang, nativeLang) {
     // 中文简繁体视为同一语系
@@ -537,7 +555,8 @@
       }
 
       const text = getTextContent(container);
-      if (!text || text.length < 50) continue;
+      const minLen = isLikelyBilibiliCommentContainer(container) ? 10 : 50;
+      if (!text || text.length < minLen) continue;
       if (isCodeText(text)) continue;
 
       const path = getElementPath(container);
@@ -1116,7 +1135,7 @@
   }
 
   // ============ API 调用 ============
-  async function translateText(text) {
+  async function translateText(text, options = {}) {
     if (!config.apiEndpoint) {
       throw new Error('API 未配置');
     }
@@ -1142,7 +1161,9 @@
     
     const sourceLang = isNative ? config.nativeLanguage : detectedLang;
     const targetLang = isNative ? config.targetLanguage : config.nativeLanguage;
-    const maxReplacements = INTENSITY_CONFIG[config.intensity]?.maxPerParagraph || 8;
+    const baseMaxReplacements = INTENSITY_CONFIG[config.intensity]?.maxPerParagraph || 8;
+    const maxReplacementsCap = Number.isFinite(options.maxReplacementsCap) ? options.maxReplacementsCap : Infinity;
+    const maxReplacements = Math.max(1, Math.min(baseMaxReplacements, maxReplacementsCap));
 
     // 检查缓存 - 只检查有意义的词汇（排除常见停用词）
     const words = (text.match(/\b[a-zA-Z]{5,}\b/g) || []).filter(w => !STOP_WORDS.has(w.toLowerCase()));
@@ -1248,7 +1269,8 @@
 
     // 判断是否需要限制异步替换数量
     const cacheSatisfied = immediateResults.length >= maxReplacements;
-    const textTooShort = filteredText.trim().length < 50;
+    const minTextLenForApi = Number.isFinite(options.minTextLenForApi) ? options.minTextLenForApi : 50;
+    const textTooShort = filteredText.trim().length < minTextLenForApi;
     
     // 如果文本太短，不需要调用API
     if (textTooShort) {
@@ -1722,9 +1744,6 @@ ${uncached.join(', ')}
           if (container.hasAttribute('data-vocabmeld-processed')) {
             continue;
           }
-          if (container.hasAttribute(SCANNED_ATTR)) {
-            continue;
-          }
           // 跳过正在处理的容器
           if (container.hasAttribute(PROCESSING_ATTR)) {
             continue;
@@ -1763,7 +1782,7 @@ ${uncached.join(', ')}
           pendingContainers.delete(container);
           continue;
         }
-        if (container.hasAttribute('data-vocabmeld-processed') || container.hasAttribute(SCANNED_ATTR)) {
+        if (container.hasAttribute('data-vocabmeld-processed')) {
           pendingContainers.delete(container);
         }
       }
@@ -1773,7 +1792,7 @@ ${uncached.join(', ')}
       const viewportCenter = viewportHeight / 2;
       const scored = Array.from(pendingContainers).map((container) => {
         try {
-          if (container.hasAttribute('data-vocabmeld-processed') || container.hasAttribute(SCANNED_ATTR)) {
+          if (container.hasAttribute('data-vocabmeld-processed')) {
             return { container, score: Number.POSITIVE_INFINITY };
           }
           const rect = container.getBoundingClientRect();
@@ -1805,14 +1824,15 @@ ${uncached.join(', ')}
         container.removeAttribute('data-vocabmeld-observing');
         
         if (container.hasAttribute('data-vocabmeld-processed')) continue;
-        if (container.hasAttribute(SCANNED_ATTR)) continue;
-        
         const text = getTextContent(container);
-        if (!text || text.length < 50) continue;
+        const isBiliComment = isLikelyBilibiliCommentContainer(container);
+        const minLen = isBiliComment ? 10 : 50;
+        if (!text || text.length < minLen) continue;
         if (isCodeText(text)) continue;
         
         const path = getElementPath(container);
         const fingerprint = generateFingerprint(text, path);
+        if (container.getAttribute(SCANNED_ATTR) === fingerprint) continue;
         if (processedFingerprints.has(fingerprint)) continue;
         
         // 过滤白名单词汇（单次扫描，避免为每个词构造/执行正则）
@@ -1823,8 +1843,17 @@ ${uncached.join(', ')}
             .replace(/\s+/g, ' ');
         }
         
-        if (filteredText.trim().length >= 30) {
-          segments.push({ element: container, text: text.slice(0, 2000), filteredText, fingerprint, path });
+        const minFilteredLen = isBiliComment ? 10 : 30;
+        if (filteredText.trim().length >= minFilteredLen) {
+          segments.push({
+            element: container,
+            text: text.slice(0, 2000),
+            filteredText,
+            fingerprint,
+            path,
+            minTextLenForApi: isBiliComment ? 10 : 50,
+            maxReplacementsCap: isBiliComment ? 2 : Infinity
+          });
         }
       }
 
@@ -1867,7 +1896,10 @@ ${uncached.join(', ')}
         processedFingerprints.add(segment.fingerprint);
       }
 
-      const result = await translateText(segment.filteredText);
+      const result = await translateText(segment.filteredText, {
+        minTextLenForApi: segment.minTextLenForApi,
+        maxReplacementsCap: segment.maxReplacementsCap
+      });
 
       // 先应用缓存结果
       if (result.immediate?.length) {
@@ -1908,7 +1940,9 @@ ${uncached.join(', ')}
       console.error('[VocabMeld] Segment error:', e);
     } finally {
       segment.element.removeAttribute(PROCESSING_ATTR);
-      segment.element.setAttribute(SCANNED_ATTR, 'true');
+      // Prevent repeatedly re-processing the same content; if the text changes, fingerprint changes.
+      processedFingerprints.add(segment.fingerprint);
+      segment.element.setAttribute(SCANNED_ATTR, segment.fingerprint);
     }
   }
 
@@ -1933,9 +1967,6 @@ ${uncached.join(', ')}
         continue;
       }
       // 跳过正在处理的容器
-      if (container.hasAttribute(SCANNED_ATTR)) {
-        continue;
-      }
       if (container.hasAttribute(PROCESSING_ATTR)) {
         continue;
       }
