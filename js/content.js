@@ -34,6 +34,7 @@
   const MIN_SENTENCE_CHARS = 20;
   const MAX_INLINE_TRANSLATION_CHARS = 2000;
   const PROCESSING_ATTR = 'data-vocabmeld-processing';
+  const SCANNED_ATTR = 'data-vocabmeld-scanned';
   const VIEWPORT_PREFETCH_MARGIN_PX = 600; // 优先处理视口附近（上下文）内容
   const STOP_WORDS = new Set([
     'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
@@ -441,28 +442,58 @@
   }
 
   function findTextContainers(root) {
-    const containers = [];
-    
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+    // Build containers by walking text nodes and mapping them to a preferred ancestor container.
+    // This avoids missing content on pages where text is wrapped in spans (no direct text nodes).
+    const containers = new Set();
+    const preferredTags = new Set([
+      'P', 'LI', 'TD', 'TH', 'ARTICLE', 'SECTION', 'BLOCKQUOTE',
+      'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'DIV'
+    ]);
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: (node) => {
-        if (shouldSkipNode(node)) return NodeFilter.FILTER_REJECT;
-        if (TEXT_CONTAINER_TAGS.has(node.tagName)) return NodeFilter.FILTER_ACCEPT;
-        return NodeFilter.FILTER_SKIP;
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        if (shouldSkipNode(parent, true)) return NodeFilter.FILTER_REJECT;
+        const text = (node.textContent || '').trim();
+        if (text.length < 10) return NodeFilter.FILTER_REJECT;
+        if (isCodeText(text)) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
       }
     });
 
-    let node;
-    while (node = walker.nextNode()) {
-      let hasDirectText = false;
-      for (const child of node.childNodes) {
-        if (child.nodeType === Node.TEXT_NODE && child.textContent.trim().length > 10) {
-          hasDirectText = true;
+    let textNode;
+    while (textNode = walker.nextNode()) {
+      let current = textNode.parentElement;
+      if (!current) continue;
+
+      let spanFallback = null;
+      while (current && current !== document.body) {
+        if (shouldSkipNode(current, true)) break;
+
+        if (preferredTags.has(current.tagName)) {
+          containers.add(current);
           break;
         }
+
+        if (TEXT_CONTAINER_TAGS.has(current.tagName)) {
+          if (current.tagName === 'SPAN') {
+            spanFallback = current;
+          } else {
+            containers.add(current);
+            break;
+          }
+        }
+
+        current = current.parentElement;
       }
-      if (hasDirectText) containers.push(node);
+
+      if ((!current || current === document.body) && spanFallback) {
+        containers.add(spanFallback);
+      }
     }
-    return containers;
+
+    return Array.from(containers);
   }
 
   function getTextContent(element) {
@@ -749,6 +780,7 @@
     restoreAllSegmentTranslations(document);
     document.querySelectorAll('.vocabmeld-translated').forEach(restoreOriginal);
     document.querySelectorAll('[data-vocabmeld-processed]').forEach(el => el.removeAttribute('data-vocabmeld-processed'));
+    document.querySelectorAll(`[${SCANNED_ATTR}]`).forEach(el => el.removeAttribute(SCANNED_ATTR));
     document.querySelectorAll('[data-vocabmeld-observing]').forEach(el => el.removeAttribute('data-vocabmeld-observing'));
     document.querySelectorAll(`[${PROCESSING_ATTR}]`).forEach(el => el.removeAttribute(PROCESSING_ATTR));
     processedFingerprints.clear();
@@ -1690,6 +1722,9 @@ ${uncached.join(', ')}
           if (container.hasAttribute('data-vocabmeld-processed')) {
             continue;
           }
+          if (container.hasAttribute(SCANNED_ATTR)) {
+            continue;
+          }
           // 跳过正在处理的容器
           if (container.hasAttribute(PROCESSING_ATTR)) {
             continue;
@@ -1722,10 +1757,25 @@ ${uncached.join(', ')}
     isProcessing = true;
     
     try {
+      // Drop entries that are no longer eligible to process.
+      for (const container of Array.from(pendingContainers)) {
+        if (!container?.isConnected) {
+          pendingContainers.delete(container);
+          continue;
+        }
+        if (container.hasAttribute('data-vocabmeld-processed') || container.hasAttribute(SCANNED_ATTR)) {
+          pendingContainers.delete(container);
+        }
+      }
+      if (pendingContainers.size === 0) return;
+
       const viewportHeight = window.innerHeight || 1;
       const viewportCenter = viewportHeight / 2;
       const scored = Array.from(pendingContainers).map((container) => {
         try {
+          if (container.hasAttribute('data-vocabmeld-processed') || container.hasAttribute(SCANNED_ATTR)) {
+            return { container, score: Number.POSITIVE_INFINITY };
+          }
           const rect = container.getBoundingClientRect();
           const inViewport = rect.bottom > 0 && rect.top < viewportHeight;
           const center = rect.top + rect.height / 2;
@@ -1755,6 +1805,7 @@ ${uncached.join(', ')}
         container.removeAttribute('data-vocabmeld-observing');
         
         if (container.hasAttribute('data-vocabmeld-processed')) continue;
+        if (container.hasAttribute(SCANNED_ATTR)) continue;
         
         const text = getTextContent(container);
         if (!text || text.length < 50) continue;
@@ -1857,6 +1908,7 @@ ${uncached.join(', ')}
       console.error('[VocabMeld] Segment error:', e);
     } finally {
       segment.element.removeAttribute(PROCESSING_ATTR);
+      segment.element.setAttribute(SCANNED_ATTR, 'true');
     }
   }
 
@@ -1881,6 +1933,9 @@ ${uncached.join(', ')}
         continue;
       }
       // 跳过正在处理的容器
+      if (container.hasAttribute(SCANNED_ATTR)) {
+        continue;
+      }
       if (container.hasAttribute(PROCESSING_ATTR)) {
         continue;
       }
