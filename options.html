@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VocabMeld 设置</title>
+  <link rel="stylesheet" href="css/options.css">
+</head>
+
+<body>
+  <div class="options-container">
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <img src="icons/icon48.png" alt="VocabMeld" class="sidebar-logo">
+        <h1>VocabMeld</h1>
+        <span class="version">v1.0.0</span>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="#api" class="nav-item active" data-section="api">
+          <svg viewBox="0 0 24 24" width="20" height="20">
+            <path fill="currentColor"
+              d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M12,5A3,3 0 0,1 15,8A3,3 0 0,1 12,11A3,3 0 0,1 9,8A3,3 0 0,1 12,5M17.13,17C15.92,18.85 14.11,20.24 12,20.92C9.89,20.24 8.08,18.85 6.87,17C6.53,16.5 6.24,16 6,15.47C6,13.82 8.71,12.47 12,12.47C15.29,12.47 18,13.79 18,15.47C17.76,16 17.47,16.5 17.13,17Z" />
+          </svg>
+          API 配置
+        </a>
+        <a href="#learning" class="nav-item" data-section="learning">
+          <svg viewBox="0 0 24 24" width="20" height="20">
+            <path fill="currentColor"
+              d="M12,3L1,9L12,15L21,10.09V17H23V9M5,13.18V17.18L12,21L19,17.18V13.18L12,17L5,13.18Z" />
+          </svg>
+          学习偏好
+        </a>
+        <a href="#behavior" class="nav-item" data-section="behavior">
+          <svg viewBox="0 0 24 24" width="20" height="20">
+            <path fill="currentColor"
+              d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.67 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z" />
+          </svg>
+          行为设置
+        </a>
+        <a href="#sites" class="nav-item" data-section="sites">
+          <svg viewBox="0 0 24 24" width="20" height="20">
+            <path fill="currentColor"
+              d="M16.36,14C16.44,13.34 16.5,12.68 16.5,12C16.5,11.32 16.44,10.66 16.36,10H19.74C19.9,10.64 20,11.31 20,12C20,12.69 19.9,13.36 19.74,14M14.59,19.56C15.19,18.45 15.65,17.25 15.97,16H18.92C17.96,17.65 16.43,18.93 14.59,19.56M14.34,14H9.66C9.56,13.34 9.5,12.68 9.5,12C9.5,11.32 9.56,10.65 9.66,10H14.34C14.43,10.65 14.5,11.32 14.5,12C14.5,12.68 14.43,13.34 14.34,14M12,19.96C11.17,18.76 10.5,17.43 10.09,16H13.91C13.5,17.43 12.83,18.76 12,19.96M8,8H5.08C6.03,6.34 7.57,5.06 9.4,4.44C8.8,5.55 8.35,6.75 8,8M5.08,16H8C8.35,17.25 8.8,18.45 9.4,19.56C7.57,18.93 6.03,17.65 5.08,16M4.26,14C4.1,13.36 4,12.69 4,12C4,11.31 4.1,10.64 4.26,10H7.64C7.56,10.66 7.5,11.32 7.5,12C7.5,12.68 7.56,13.34 7.64,14M12,4.03C12.83,5.23 13.5,6.57 13.91,8H10.09C10.5,6.57 11.17,5.23 12,4.03M18.92,8H15.97C15.65,6.75 15.19,5.55 14.59,4.44C16.43,5.07 17.96,6.34 18.92,8M12,2C6.47,2 2,6.5 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z" />
+          </svg>
+          站点规则
+        </a>
+        <a href="#words" class="nav-item" data-section="words">
+          <svg viewBox="0 0 24 24" width="20" height="20">
+            <path fill="currentColor"
+              d="M19,3H14.82C14.4,1.84 13.3,1 12,1C10.7,1 9.6,1.84 9.18,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M12,3A1,1 0 0,1 13,4A1,1 0 0,1 12,5A1,1 0 0,1 11,4A1,1 0 0,1 12,3M7,7H17V5H19V19H5V5H7V7M7.5,13.5L9,12L11,14L15.5,9.5L17,11L11,17L7.5,13.5Z" />
+          </svg>
+          词汇管理
+        </a>
+        <a href="#logs" class="nav-item" data-section="logs">
+          <svg viewBox="0 0 24 24" width="20" height="20">
+            <path fill="currentColor"
+              d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20M8,12H16V14H8V12M8,16H16V18H8V16M8,8H11V10H8V8Z" />
+          </svg>
+          日志
+        </a>
+        <a href="#more" class="nav-item" data-section="more">
+          <svg viewBox="0 0 24 24" width="20" height="20">
+            <path fill="currentColor"
+              d="M12,16A2,2 0 0,1 14,18A2,2 0 0,1 12,20A2,2 0 0,1 10,18A2,2 0 0,1 12,16M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M12,4A2,2 0 0,1 14,6A2,2 0 0,1 12,8A2,2 0 0,1 10,6A2,2 0 0,1 12,4Z" />
+          </svg>
+          更多
+        </a>
+      </nav>
+    </aside>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+      <!-- API 配置 -->
+      <section id="api" class="settings-section active">
+        <h2>API 配置</h2>
+        <p class="section-desc">配置用于翻译的 AI 服务 API</p>
+
+        <div class="form-group">
+          <label>配置</label>
+          <div class="config-selector">
+            <select id="apiConfigSelect"></select>
+            <button type="button" class="btn-icon" id="newConfigBtn" title="新建配置">
+              <svg viewBox="0 0 24 24" width="18" height="18">
+                <path fill="currentColor" d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z" />
+              </svg>
+            </button>
+            <button type="button" class="btn-icon btn-icon-danger" id="deleteConfigBtn" title="删除配置">
+              <svg viewBox="0 0 24 24" width="18" height="18">
+                <path fill="currentColor"
+                  d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="configName">配置名称</label>
+          <input type="text" id="configName" placeholder="输入配置名称">
+        </div>
+
+        <div class="form-group">
+          <label for="apiEndpoint">API 端点</label>
+          <input type="url" id="apiEndpoint" placeholder="https://api.example.com/v1/chat/completions">
+        </div>
+
+        <div class="form-group">
+          <label for="apiKey">API 密钥</label>
+          <div class="input-with-toggle">
+            <input type="password" id="apiKey" placeholder="sk-xxxxx">
+            <button type="button" class="toggle-visibility" id="toggleApiKey">
+              <svg viewBox="0 0 24 24" width="20" height="20">
+                <path fill="currentColor"
+                  d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="modelName">模型名称</label>
+          <input type="text" id="modelName" placeholder="gpt-4o-mini">
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" id="saveConfigBtn">
+            <svg viewBox="0 0 24 24" width="18" height="18">
+              <path fill="currentColor"
+                d="M15,9H5V5H15M12,19A3,3 0 0,1 9,16A3,3 0 0,1 12,13A3,3 0 0,1 15,16A3,3 0 0,1 12,19M17,3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3Z" />
+            </svg>
+            保存配置
+          </button>
+          <button class="btn btn-secondary" id="testConnectionBtn">
+            <svg viewBox="0 0 24 24" width="18" height="18">
+              <path fill="currentColor"
+                d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M11,16.5L18,9.5L16.59,8.09L11,13.67L7.91,10.59L6.5,12L11,16.5Z" />
+            </svg>
+            测试连接
+          </button>
+          <span class="test-result" id="testResult"></span>
+        </div>
+      </section>
+
+      <!-- 学习偏好 -->
+      <section id="learning" class="settings-section">
+        <h2>学习偏好</h2>
+        <p class="section-desc">设置你的语言学习目标和难度</p>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="nativeLanguage">母语语言</label>
+            <select id="nativeLanguage">
+              <option value="zh-CN">简体中文</option>
+              <option value="zh-TW">繁体中文</option>
+              <option value="en">English</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="targetLanguage">学习语言</label>
+            <select id="targetLanguage">
+              <option value="en">English</option>
+              <option value="zh-CN">简体中文</option>
+              <option value="zh-TW">繁体中文</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+              <option value="fr">Français</option>
+              <option value="de">Deutsch</option>
+              <option value="es">Español</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>处理模式</label>
+          <p class="help-text">选择要处理的网页语言类型</p>
+          <div class="process-mode-selector">
+            <label class="process-mode-option">
+              <input type="radio" name="processMode" value="both" checked>
+              <span class="process-mode-card">
+                <span class="process-mode-icon">🔄</span>
+                <span class="process-mode-name">双向处理</span>
+              </span>
+            </label>
+            <label class="process-mode-option">
+              <input type="radio" name="processMode" value="native-only">
+              <span class="process-mode-card">
+                <span class="process-mode-icon">📤</span>
+                <span class="process-mode-name">仅母语网页</span>
+              </span>
+            </label>
+            <label class="process-mode-option">
+              <input type="radio" name="processMode" value="target-only">
+              <span class="process-mode-card">
+                <span class="process-mode-icon">📥</span>
+                <span class="process-mode-name">仅学习语言</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="difficultyLevel">难度等级 (CEFR)</label>
+          <div class="difficulty-selector">
+            <input type="range" id="difficultyLevel" min="0" max="5" value="2">
+            <div class="difficulty-labels">
+              <span>A1</span>
+              <span>A2</span>
+              <span>B1</span>
+              <span>B2</span>
+              <span>C1</span>
+              <span>C2</span>
+            </div>
+          </div>
+          <p class="help-text">选择 <strong id="selectedDifficulty">B1</strong> 等级，将显示该等级及以上难度的词汇</p>
+        </div>
+
+        <div class="form-group">
+          <label>替换强度</label>
+          <div class="intensity-selector">
+            <label class="intensity-option">
+              <input type="radio" name="intensity" value="low">
+              <span class="intensity-card">
+                <span class="intensity-icon">📖</span>
+                <span class="intensity-name">较少</span>
+                <span class="intensity-desc">每段 4 词</span>
+              </span>
+            </label>
+            <label class="intensity-option">
+              <input type="radio" name="intensity" value="medium" checked>
+              <span class="intensity-card">
+                <span class="intensity-icon">📚</span>
+                <span class="intensity-name">适中</span>
+                <span class="intensity-desc">每段 8 词</span>
+              </span>
+            </label>
+            <label class="intensity-option">
+              <input type="radio" name="intensity" value="high">
+              <span class="intensity-card">
+                <span class="intensity-icon">🎓</span>
+                <span class="intensity-name">较多</span>
+                <span class="intensity-desc">每段 14 词</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>发音设置</label>
+          <p class="help-text">配置学习语言的发音声音和语速</p>
+          <div class="voice-settings">
+            <div class="voice-setting-row">
+              <label for="ttsVoice">声音</label>
+              <div class="voice-select-wrapper">
+                <select id="ttsVoice">
+                  <option value="">系统默认</option>
+                </select>
+                <button type="button" class="btn-icon" id="testVoiceBtn" title="测试发音">
+                  <svg viewBox="0 0 24 24" width="18" height="18">
+                    <path fill="currentColor"
+                      d="M14,3.23V5.29C16.89,6.15 19,8.83 19,12C19,15.17 16.89,17.84 14,18.7V20.77C18,19.86 21,16.28 21,12C21,7.72 18,4.14 14,3.23M16.5,12C16.5,10.23 15.5,8.71 14,7.97V16C15.5,15.29 16.5,13.76 16.5,12M3,9V15H7L12,20V4L7,9H3Z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="voice-setting-row">
+              <label for="ttsRate">语速 (<span id="ttsRateValue">1.0</span>x)</label>
+              <input type="range" id="ttsRate" min="0.5" max="2" step="0.1" value="1.0">
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 行为设置 -->
+      <section id="behavior" class="settings-section">
+        <h2>行为设置</h2>
+        <p class="section-desc">控制插件的自动化行为</p>
+
+        <div class="form-group">
+          <label>界面主题</label>
+          <p class="help-text">选择你喜欢的界面外观</p>
+          <div class="theme-selector">
+            <label class="theme-option">
+              <input type="radio" name="theme" value="dark" checked>
+              <span class="theme-card">
+                <span class="theme-preview theme-preview-dark">
+                  <span class="theme-dot"></span>
+                  <span class="theme-line"></span>
+                  <span class="theme-line short"></span>
+                </span>
+                <span class="theme-name">深色</span>
+              </span>
+            </label>
+            <label class="theme-option">
+              <input type="radio" name="theme" value="light">
+              <span class="theme-card">
+                <span class="theme-preview theme-preview-light">
+                  <span class="theme-dot"></span>
+                  <span class="theme-line"></span>
+                  <span class="theme-line short"></span>
+                </span>
+                <span class="theme-name">浅色</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="toggle-group">
+          <div class="toggle-item">
+            <div class="toggle-info">
+              <span class="toggle-title">自动处理新页面</span>
+              <span class="toggle-desc">打开新页面时自动进行词汇替换</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="autoProcess">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="toggle-item">
+            <div class="toggle-info">
+              <span class="toggle-title">显示音标</span>
+              <span class="toggle-desc">在悬停提示中显示学习语言的音标</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="showPhonetic" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="toggle-item">
+            <div class="toggle-info">
+              <span class="toggle-title">选中添加到记忆</span>
+              <span class="toggle-desc">选中文本时显示"添加到需记忆"按钮</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="showAddMemorize" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>缓存上限</label>
+          <p class="help-text">设置词汇缓存的最大数量，更大的缓存可减少 API 调用</p>
+          <div class="cache-selector">
+            <label class="cache-option">
+              <input type="radio" name="cacheMaxSize" value="500">
+              <span class="cache-card">
+                <span class="cache-size">500</span>
+                <span class="cache-desc">约 50KB</span>
+              </span>
+            </label>
+            <label class="cache-option">
+              <input type="radio" name="cacheMaxSize" value="1000">
+              <span class="cache-card">
+                <span class="cache-size">1000</span>
+                <span class="cache-desc">约 100KB</span>
+              </span>
+            </label>
+            <label class="cache-option">
+              <input type="radio" name="cacheMaxSize" value="2000" checked>
+              <span class="cache-card">
+                <span class="cache-size">2000</span>
+                <span class="cache-desc">约 200KB · 默认</span>
+              </span>
+            </label>
+            <label class="cache-option">
+              <input type="radio" name="cacheMaxSize" value="5000">
+              <span class="cache-card">
+                <span class="cache-size">5000</span>
+                <span class="cache-desc">约 500KB</span>
+              </span>
+            </label>
+            <label class="cache-option">
+              <input type="radio" name="cacheMaxSize" value="10000">
+              <span class="cache-card">
+                <span class="cache-size">10000</span>
+                <span class="cache-desc">约 1MB</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>翻译显示样式</label>
+          <p class="help-text">选择翻译词汇在页面上的显示方式</p>
+          <div class="style-selector">
+            <label class="style-option">
+              <input type="radio" name="translationStyle" value="translation-original" checked>
+              <span class="style-card">
+                <span class="style-preview">译文(原文)</span>
+                <span class="style-desc">默认样式</span>
+              </span>
+            </label>
+            <label class="style-option">
+              <input type="radio" name="translationStyle" value="translation-only">
+              <span class="style-card">
+                <span class="style-preview">译文</span>
+                <span class="style-desc">仅显示译文，悬停查看原文</span>
+              </span>
+            </label>
+            <label class="style-option">
+              <input type="radio" name="translationStyle" value="original-translation">
+              <span class="style-card">
+                <span class="style-preview">原文(译文)</span>
+                <span class="style-desc">原文在前，译文在后</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>句子 / 段落翻译频率</label>
+          <p class="help-text">在母语网页中按段落概率追加翻译（会增加 API 调用）</p>
+          <div class="voice-settings">
+            <div class="voice-setting-row">
+              <label for="sentenceTranslationRate">句子概率 (<span id="sentenceTranslationRateValue">0</span>%)</label>
+              <input type="range" id="sentenceTranslationRate" min="0" max="100" step="5" value="0">
+            </div>
+            <div class="voice-setting-row">
+              <label for="paragraphTranslationRate">段落概率 (<span id="paragraphTranslationRateValue">0</span>%)</label>
+              <input type="range" id="paragraphTranslationRate" min="0" max="100" step="5" value="0">
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>API 访问控制</label>
+          <p class="help-text">控制请求并行数和频率限制（0 表示不限制）</p>
+          <div class="voice-settings">
+            <div class="voice-setting-row">
+              <label for="maxConcurrentRequests">并行请求数 (<span id="maxConcurrentRequestsValue">1</span>)</label>
+              <input type="range" id="maxConcurrentRequests" min="1" max="100" step="1" value="1">
+            </div>
+            <div class="voice-setting-row">
+              <label for="apiRpmLimit">RPM 限制 (<span id="apiRpmLimitValue">0</span>)</label>
+              <input type="range" id="apiRpmLimit" min="0" max="240" step="5" value="0">
+            </div>
+            <div class="voice-setting-row">
+              <label for="apiRequestIntervalMs">请求间隔 (<span id="apiRequestIntervalMsValue">0</span>)</label>
+              <input type="range" id="apiRequestIntervalMs" min="0" max="5000" step="100" value="0">
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 站点规则 -->
+      <section id="sites" class="settings-section">
+        <h2>站点规则</h2>
+        <p class="section-desc">控制插件在哪些网站上运行</p>
+
+        <div class="form-group">
+          <label>运行模式</label>
+          <p class="help-text">选择插件的运行范围</p>
+          <div class="site-mode-selector">
+            <label class="site-mode-option">
+              <input type="radio" name="siteMode" value="all" checked>
+              <span class="site-mode-card">
+                <span class="site-mode-icon">🌐</span>
+                <span class="site-mode-info">
+                  <span class="site-mode-title">所有网站</span>
+                  <span class="site-mode-desc">在所有网站运行，可排除特定站点</span>
+                </span>
+              </span>
+            </label>
+            <label class="site-mode-option">
+              <input type="radio" name="siteMode" value="whitelist">
+              <span class="site-mode-card">
+                <span class="site-mode-icon">📋</span>
+                <span class="site-mode-info">
+                  <span class="site-mode-title">仅指定网站</span>
+                  <span class="site-mode-desc">只在指定的网站上运行</span>
+                </span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group site-list-group" id="excludedSitesGroup">
+          <label for="excludedSitesInput">排除站点</label>
+          <p class="help-text">这些站点将不会进行任何处理，每行一个（支持部分匹配，如 "github" 匹配所有包含 github 的域名）</p>
+          <textarea id="excludedSitesInput" placeholder="example.com&#10;github.com"></textarea>
+        </div>
+
+        <div class="form-group site-list-group" id="allowedSitesGroup" style="display: none;">
+          <label for="allowedSitesInput">指定站点</label>
+          <p class="help-text">只有这些站点会进行处理，每行一个（支持部分匹配，如 "news" 匹配所有包含 news 的域名）</p>
+          <textarea id="allowedSitesInput" placeholder="news.example.com&#10;blog.example.com"></textarea>
+        </div>
+      </section>
+
+      <!-- 词汇管理 -->
+      <section id="words" class="settings-section">
+        <h2>词汇管理</h2>
+        <p class="section-desc">管理已学会和需记忆的词汇，查看学习进度</p>
+
+        <div class="stats-overview">
+          <div class="stat-box">
+            <div class="stat-number" id="statTotalWords">0</div>
+            <div class="stat-label">累计接触</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-number" id="statTodayWords">0</div>
+            <div class="stat-label">今日接触</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-number" id="statLearnedWords">0</div>
+            <div class="stat-label">已学会</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-number" id="statMemorizeWords">0</div>
+            <div class="stat-label">需记忆</div>
+          </div>
+        </div>
+
+        <div class="cache-overview">
+          <div class="cache-bar">
+            <div class="cache-progress" id="cacheProgress"></div>
+          </div>
+          <div class="cache-info">
+            <span>已缓存: <strong id="statCacheSize">0</strong></span>
+            <span>命中率: <strong id="statHitRate">0%</strong></span>
+            <button class="btn btn-text-small" id="resetTodayBtn">重置今日</button>
+            <button class="btn btn-text-small btn-danger-text" id="resetAllBtn">重置全部</button>
+          </div>
+        </div>
+
+        <div class="word-tabs">
+          <button class="word-tab active" data-tab="learned">已学会 (<span id="learnedTabCount">0</span>)</button>
+          <button class="word-tab" data-tab="memorize">需记忆 (<span id="memorizeTabCount">0</span>)</button>
+          <button class="word-tab" data-tab="cached">已缓存 (<span id="cachedTabCount">0</span>)</button>
+        </div>
+
+        <!-- 已学会页面的搜索和筛选 -->
+        <div class="word-filters hidden" id="learnedFilters" data-tab="learned">
+          <div class="search-box">
+            <input type="text" id="learnedSearchInput" placeholder="搜索单词或翻译..." class="search-input">
+            <svg viewBox="0 0 24 24" width="18" height="18" class="search-icon">
+              <path fill="currentColor"
+                d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z" />
+            </svg>
+          </div>
+          <div class="filter-box">
+            <label>难度筛选：</label>
+            <div class="difficulty-filters">
+              <button class="difficulty-filter-btn active" data-difficulty="all" data-tab="learned">全部</button>
+              <button class="difficulty-filter-btn" data-difficulty="A1" data-tab="learned">A1</button>
+              <button class="difficulty-filter-btn" data-difficulty="A2" data-tab="learned">A2</button>
+              <button class="difficulty-filter-btn" data-difficulty="B1" data-tab="learned">B1</button>
+              <button class="difficulty-filter-btn" data-difficulty="B2" data-tab="learned">B2</button>
+              <button class="difficulty-filter-btn" data-difficulty="C1" data-tab="learned">C1</button>
+              <button class="difficulty-filter-btn" data-difficulty="C2" data-tab="learned">C2</button>
+            </div>
+          </div>
+          <div class="word-actions">
+            <button class="btn btn-danger" id="clearLearnedBtn">清空已学会</button>
+          </div>
+        </div>
+
+        <!-- 需记忆页面的搜索和筛选 -->
+        <div class="word-filters hidden" id="memorizeFilters" data-tab="memorize">
+          <div class="search-box">
+            <input type="text" id="memorizeSearchInput" placeholder="搜索单词或翻译..." class="search-input">
+            <svg viewBox="0 0 24 24" width="18" height="18" class="search-icon">
+              <path fill="currentColor"
+                d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z" />
+            </svg>
+          </div>
+          <div class="filter-box">
+            <label>难度筛选：</label>
+            <div class="difficulty-filters">
+              <button class="difficulty-filter-btn active" data-difficulty="all" data-tab="memorize">全部</button>
+              <button class="difficulty-filter-btn" data-difficulty="A1" data-tab="memorize">A1</button>
+              <button class="difficulty-filter-btn" data-difficulty="A2" data-tab="memorize">A2</button>
+              <button class="difficulty-filter-btn" data-difficulty="B1" data-tab="memorize">B1</button>
+              <button class="difficulty-filter-btn" data-difficulty="B2" data-tab="memorize">B2</button>
+              <button class="difficulty-filter-btn" data-difficulty="C1" data-tab="memorize">C1</button>
+              <button class="difficulty-filter-btn" data-difficulty="C2" data-tab="memorize">C2</button>
+            </div>
+          </div>
+          <div class="word-actions">
+            <button class="btn btn-danger" id="clearMemorizeBtn">清空需记忆</button>
+          </div>
+        </div>
+
+        <!-- 已缓存页面的搜索和筛选 -->
+        <div class="word-filters hidden" id="cachedFilters" data-tab="cached">
+          <div class="search-box">
+            <input type="text" id="cachedSearchInput" placeholder="搜索单词或翻译..." class="search-input">
+            <svg viewBox="0 0 24 24" width="18" height="18" class="search-icon">
+              <path fill="currentColor"
+                d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z" />
+            </svg>
+          </div>
+          <div class="filter-box">
+            <label>难度筛选：</label>
+            <div class="difficulty-filters">
+              <button class="difficulty-filter-btn active" data-difficulty="all" data-tab="cached">全部</button>
+              <button class="difficulty-filter-btn" data-difficulty="A1" data-tab="cached">A1</button>
+              <button class="difficulty-filter-btn" data-difficulty="A2" data-tab="cached">A2</button>
+              <button class="difficulty-filter-btn" data-difficulty="B1" data-tab="cached">B1</button>
+              <button class="difficulty-filter-btn" data-difficulty="B2" data-tab="cached">B2</button>
+              <button class="difficulty-filter-btn" data-difficulty="C1" data-tab="cached">C1</button>
+              <button class="difficulty-filter-btn" data-difficulty="C2" data-tab="cached">C2</button>
+            </div>
+          </div>
+          <div class="word-actions">
+            <button class="btn btn-danger" id="clearCacheBtn">清空缓存</button>
+          </div>
+        </div>
+
+        <div class="word-list-container">
+          <div class="word-list" id="learnedList" data-tab="learned"></div>
+          <div class="word-list hidden" id="memorizeList" data-tab="memorize"></div>
+          <div class="word-list hidden" id="cachedList" data-tab="cached"></div>
+        </div>
+      </section>
+
+      <!-- 设置页面现在自动保存，无需手动保存按钮 -->
+
+      <!-- 日志 -->
+      <section id="logs" class="settings-section">
+        <h2>日志</h2>
+        <p class="section-desc">查看扩展运行日志（保存在本地存储）</p>
+
+        <div class="form-group">
+          <label for="logRetentionDays">日志自动清除时间（天）</label>
+          <input type="number" id="logRetentionDays" min="0" step="1" placeholder="7">
+          <p class="help-text">设置为 0 表示不自动清除（保留全部日志）</p>
+        </div>
+
+        <div class="form-group">
+          <label>操作</label>
+          <div class="form-actions logs-actions">
+            <button class="btn btn-secondary" id="refreshLogsBtn">刷新</button>
+            <button class="btn btn-secondary" id="pruneLogsBtn">立即清理</button>
+            <button class="btn btn-danger" id="clearLogsBtn">清空日志</button>
+            <span class="logs-summary" id="logsSummary"></span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>日志内容</label>
+          <pre id="logsContent" class="logs-content"></pre>
+        </div>
+      </section>
+
+      <!-- 更多 -->
+      <section id="more" class="settings-section">
+        <h2>更多</h2>
+        <p class="section-desc">关于与数据管理</p>
+
+        <!-- 关于信息 -->
+        <div class="about-card-full">
+          <div class="about-logo">
+            <img src="icons/icon128.png" alt="VocabMeld" width="72" height="72">
+          </div>
+          <div class="about-content">
+            <div class="about-info">
+              <h3>VocabMeld</h3>
+              <p class="about-tagline">智能替换网页词汇，创造沉浸式双语学习环境</p>
+              <p class="about-theory">基于「可理解性输入」理论，让语言学习融入日常生活</p>
+            </div>
+            <div class="about-meta">
+              <a href="https://github.com/lzskyline/VocabMeld" target="_blank" class="about-link-btn">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor"
+                    d="M12,2A10,10 0 0,0 2,12C2,16.42 4.87,20.17 8.84,21.5C9.34,21.58 9.5,21.27 9.5,21C9.5,20.77 9.5,20.14 9.5,19.31C6.73,19.91 6.14,17.97 6.14,17.97C5.68,16.81 5.03,16.5 5.03,16.5C4.12,15.88 5.1,15.9 5.1,15.9C6.1,15.97 6.63,16.93 6.63,16.93C7.5,18.45 8.97,18 9.54,17.76C9.63,17.11 9.89,16.67 10.17,16.42C7.95,16.17 5.62,15.31 5.62,11.5C5.62,10.39 6,9.5 6.65,8.79C6.55,8.54 6.2,7.5 6.75,6.15C6.75,6.15 7.59,5.88 9.5,7.17C10.29,6.95 11.15,6.84 12,6.84C12.85,6.84 13.71,6.95 14.5,7.17C16.41,5.88 17.25,6.15 17.25,6.15C17.8,7.5 17.45,8.54 17.35,8.79C18,9.5 18.38,10.39 18.38,11.5C18.38,15.32 16.04,16.16 13.81,16.41C14.17,16.72 14.5,17.33 14.5,18.26C14.5,19.6 14.5,20.68 14.5,21C14.5,21.27 14.66,21.59 15.17,21.5C19.14,20.16 22,16.42 22,12A10,10 0 0,0 12,2Z" />
+                </svg>
+                GitHub 仓库
+              </a>
+              <span class="about-author-tag">
+                <svg viewBox="0 0 24 24" width="14" height="14">
+                  <path fill="currentColor"
+                    d="M12,4A4,4 0 0,1 16,8A4,4 0 0,1 12,12A4,4 0 0,1 8,8A4,4 0 0,1 12,4M12,14C16.42,14 20,15.79 20,18V20H4V18C4,15.79 7.58,14 12,14Z" />
+                </svg>
+                <a href="https://github.com/lzskyline" target="_blank">LzSkyline</a>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 导入导出 -->
+        <div class="form-group">
+          <label>数据导入导出</label>
+          <p class="help-text">备份或迁移你的学习数据和配置</p>
+
+          <div class="export-options">
+            <div class="export-group">
+              <h4>选择导出内容</h4>
+              <div class="checkbox-group">
+                <label class="checkbox-item">
+                  <input type="checkbox" id="exportSettings" checked>
+                  <span>配置设置（API、选项、站点规则）</span>
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" id="exportWords" checked>
+                  <span>词汇数据（已学会、需记忆）</span>
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" id="exportStats" checked>
+                  <span>统计数据</span>
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" id="exportCache">
+                  <span>缓存词汇（可能较大）</span>
+                </label>
+              </div>
+            </div>
+            <div class="export-actions">
+              <button class="btn btn-primary" id="exportDataBtn">
+                <svg viewBox="0 0 24 24" width="16" height="16">
+                  <path fill="currentColor" d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z" />
+                </svg>
+                导出数据
+              </button>
+              <button class="btn btn-secondary" id="importDataBtn">
+                <svg viewBox="0 0 24 24" width="16" height="16">
+                  <path fill="currentColor" d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"
+                    transform="rotate(180 12 12)" />
+                </svg>
+                导入数据
+              </button>
+              <input type="file" id="importFileInput" accept=".json" style="display: none;">
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="js/logger.js"></script>
+  <script src="js/options.js"></script>
+</body>
+
+</html>

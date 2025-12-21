@@ -1,0 +1,1427 @@
+/**
+ * VocabMeld Options 脚本 - 自动保存版本
+ */
+
+document.addEventListener('DOMContentLoaded', async () => {
+  // 默认 API 配置
+  const DEFAULT_API_CONFIGS = {
+    'OpenAI': { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: '', model: 'gpt-4o-mini' },
+    'DeepSeek': { endpoint: 'https://api.deepseek.com/chat/completions', apiKey: '', model: 'deepseek-chat' },
+    'Moonshot': { endpoint: 'https://api.moonshot.cn/v1/chat/completions', apiKey: '', model: 'moonshot-v1-8k' },
+    'Groq': { endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: '', model: 'llama-3.1-8b-instant' },
+    'Ollama': { endpoint: 'http://localhost:11434/v1/chat/completions', apiKey: '', model: 'qwen2.5:7b' }
+  };
+
+  // 当前配置状态
+  let apiConfigs = {};
+  let currentConfigName = '';
+  let currentLogRetentionDays = 7;
+
+  const CEFR_LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
+
+  // 防抖保存函数
+  let saveTimeout;
+  function debouncedSave(delay = 500) {
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(saveSettings, delay);
+  }
+
+  // DOM 元素
+  const elements = {
+    // 导航
+    navItems: document.querySelectorAll('.nav-item'),
+    sections: document.querySelectorAll('.settings-section'),
+
+    // API 配置
+    apiConfigSelect: document.getElementById('apiConfigSelect'),
+    newConfigBtn: document.getElementById('newConfigBtn'),
+    saveConfigBtn: document.getElementById('saveConfigBtn'),
+    deleteConfigBtn: document.getElementById('deleteConfigBtn'),
+    configName: document.getElementById('configName'),
+    apiEndpoint: document.getElementById('apiEndpoint'),
+    apiKey: document.getElementById('apiKey'),
+    modelName: document.getElementById('modelName'),
+    toggleApiKey: document.getElementById('toggleApiKey'),
+    testConnectionBtn: document.getElementById('testConnectionBtn'),
+    testResult: document.getElementById('testResult'),
+
+    // 学习偏好
+    nativeLanguage: document.getElementById('nativeLanguage'),
+    targetLanguage: document.getElementById('targetLanguage'),
+    difficultyLevel: document.getElementById('difficultyLevel'),
+    selectedDifficulty: document.getElementById('selectedDifficulty'),
+    intensityRadios: document.querySelectorAll('input[name="intensity"]'),
+    processModeRadios: document.querySelectorAll('input[name="processMode"]'),
+
+    // 行为设置
+    autoProcess: document.getElementById('autoProcess'),
+    showPhonetic: document.getElementById('showPhonetic'),
+    showAddMemorize: document.getElementById('showAddMemorize'),
+    cacheMaxSizeRadios: document.querySelectorAll('input[name="cacheMaxSize"]'),
+    translationStyleRadios: document.querySelectorAll('input[name="translationStyle"]'),
+    themeRadios: document.querySelectorAll('input[name="theme"]'),
+    ttsVoice: document.getElementById('ttsVoice'),
+    ttsRate: document.getElementById('ttsRate'),
+    ttsRateValue: document.getElementById('ttsRateValue'),
+    testVoiceBtn: document.getElementById('testVoiceBtn'),
+    sentenceTranslationRate: document.getElementById('sentenceTranslationRate'),
+    sentenceTranslationRateValue: document.getElementById('sentenceTranslationRateValue'),
+    paragraphTranslationRate: document.getElementById('paragraphTranslationRate'),
+    paragraphTranslationRateValue: document.getElementById('paragraphTranslationRateValue'),
+    apiRpmLimit: document.getElementById('apiRpmLimit'),
+    apiRpmLimitValue: document.getElementById('apiRpmLimitValue'),
+    apiRequestIntervalMs: document.getElementById('apiRequestIntervalMs'),
+    apiRequestIntervalMsValue: document.getElementById('apiRequestIntervalMsValue'),
+    maxConcurrentRequests: document.getElementById('maxConcurrentRequests'),
+    maxConcurrentRequestsValue: document.getElementById('maxConcurrentRequestsValue'),
+
+    // 站点规则
+    siteModeRadios: document.querySelectorAll('input[name="siteMode"]'),
+    excludedSitesGroup: document.getElementById('excludedSitesGroup'),
+    excludedSitesInput: document.getElementById('excludedSitesInput'),
+    allowedSitesGroup: document.getElementById('allowedSitesGroup'),
+    allowedSitesInput: document.getElementById('allowedSitesInput'),
+
+    // 词汇管理
+    wordTabs: document.querySelectorAll('.word-tab'),
+    learnedList: document.getElementById('learnedList'),
+    memorizeList: document.getElementById('memorizeList'),
+    cachedList: document.getElementById('cachedList'),
+    learnedTabCount: document.getElementById('learnedTabCount'),
+    memorizeTabCount: document.getElementById('memorizeTabCount'),
+    cachedTabCount: document.getElementById('cachedTabCount'),
+    clearLearnedBtn: document.getElementById('clearLearnedBtn'),
+    clearMemorizeBtn: document.getElementById('clearMemorizeBtn'),
+    clearCacheBtn: document.getElementById('clearCacheBtn'),
+    learnedFilters: document.getElementById('learnedFilters'),
+    memorizeFilters: document.getElementById('memorizeFilters'),
+    cachedFilters: document.getElementById('cachedFilters'),
+    learnedSearchInput: document.getElementById('learnedSearchInput'),
+    memorizeSearchInput: document.getElementById('memorizeSearchInput'),
+    cachedSearchInput: document.getElementById('cachedSearchInput'),
+    difficultyFilterBtns: document.querySelectorAll('.difficulty-filter-btn'),
+
+    // 统计
+    statTotalWords: document.getElementById('statTotalWords'),
+    statTodayWords: document.getElementById('statTodayWords'),
+    statLearnedWords: document.getElementById('statLearnedWords'),
+    statMemorizeWords: document.getElementById('statMemorizeWords'),
+    statCacheSize: document.getElementById('statCacheSize'),
+    statHitRate: document.getElementById('statHitRate'),
+    cacheProgress: document.getElementById('cacheProgress'),
+    resetTodayBtn: document.getElementById('resetTodayBtn'),
+    resetAllBtn: document.getElementById('resetAllBtn'),
+
+    // 导入导出
+    exportDataBtn: document.getElementById('exportDataBtn'),
+    importDataBtn: document.getElementById('importDataBtn'),
+    importFileInput: document.getElementById('importFileInput'),
+    exportSettings: document.getElementById('exportSettings'),
+    exportWords: document.getElementById('exportWords'),
+    exportStats: document.getElementById('exportStats'),
+    exportCache: document.getElementById('exportCache'),
+
+    // 日志
+    logRetentionDays: document.getElementById('logRetentionDays'),
+    refreshLogsBtn: document.getElementById('refreshLogsBtn'),
+    pruneLogsBtn: document.getElementById('pruneLogsBtn'),
+    clearLogsBtn: document.getElementById('clearLogsBtn'),
+    logsSummary: document.getElementById('logsSummary'),
+    logsContent: document.getElementById('logsContent')
+  };
+
+  // 应用主题
+  function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+  }
+
+  // 更新站点列表显示
+  function updateSiteListVisibility(mode) {
+    if (mode === 'all') {
+      elements.excludedSitesGroup.style.display = 'block';
+      elements.allowedSitesGroup.style.display = 'none';
+    } else {
+      elements.excludedSitesGroup.style.display = 'none';
+      elements.allowedSitesGroup.style.display = 'block';
+    }
+  }
+
+  // 加载可用声音列表（只显示学习语言相关的声音）
+  function loadVoices(selectedVoice, resetIfMismatch = false) {
+    chrome.runtime.sendMessage({ action: 'getVoices' }, (response) => {
+      const voices = response?.voices || [];
+      const select = elements.ttsVoice;
+      const targetLang = elements.targetLanguage.value;
+
+      // 获取目标语言的语言代码前缀
+      const langPrefix = getLangPrefix(targetLang);
+
+      // 清空现有选项，保留默认
+      select.innerHTML = '<option value="">系统默认</option>';
+
+      // 只筛选匹配学习语言的声音
+      const matchingVoices = voices.filter(voice => {
+        const voiceLang = voice.lang || '';
+        return voiceLang.startsWith(langPrefix);
+      });
+
+      // 如果没有匹配的声音，显示提示
+      if (matchingVoices.length === 0) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '无可用声音';
+        option.disabled = true;
+        select.appendChild(option);
+        // 清空存储的声音设置
+        if (resetIfMismatch) {
+          chrome.storage.sync.set({ ttsVoice: '' });
+        }
+        return;
+      }
+
+      // 检查选中的声音是否与当前语言匹配
+      const selectedVoiceMatches = selectedVoice && matchingVoices.some(v => v.voiceName === selectedVoice);
+
+      // 如果需要重置且不匹配，清空声音设置
+      if (resetIfMismatch && selectedVoice && !selectedVoiceMatches) {
+        selectedVoice = '';
+        chrome.storage.sync.set({ ttsVoice: '' });
+      }
+
+      // 添加匹配的声音选项
+      matchingVoices.forEach(voice => {
+        const option = document.createElement('option');
+        option.value = voice.voiceName;
+        // 简化显示名称
+        const displayName = voice.voiceName
+          .replace(/Google\s*/i, '')
+          .replace(/Microsoft\s*/i, '')
+          .replace(/Apple\s*/i, '');
+        option.textContent = displayName;
+        if (voice.voiceName === selectedVoice) {
+          option.selected = true;
+        }
+        select.appendChild(option);
+      });
+    });
+  }
+
+  // 获取语言代码前缀
+  function getLangPrefix(langCode) {
+    const prefixMap = {
+      'en': 'en',
+      'zh-CN': 'zh',
+      'zh-TW': 'zh',
+      'ja': 'ja',
+      'ko': 'ko',
+      'fr': 'fr',
+      'de': 'de',
+      'es': 'es'
+    };
+    return prefixMap[langCode] || langCode.split('-')[0];
+  }
+
+  // 加载 API 配置列表
+  function loadApiConfigs(callback) {
+    chrome.storage.sync.get(['apiConfigs', 'currentApiConfig'], (result) => {
+      // 如果没有配置，使用默认配置
+      apiConfigs = result.apiConfigs || { ...DEFAULT_API_CONFIGS };
+      currentConfigName = result.currentApiConfig || Object.keys(apiConfigs)[0] || '';
+
+      updateConfigSelect();
+
+      if (callback) callback();
+    });
+  }
+
+  // 更新配置下拉框
+  function updateConfigSelect() {
+    const select = elements.apiConfigSelect;
+    select.innerHTML = '';
+
+    // 添加已有配置
+    Object.keys(apiConfigs).forEach(name => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      if (name === currentConfigName) {
+        option.selected = true;
+      }
+      select.appendChild(option);
+    });
+
+    // 同步更新配置名称输入框
+    if (currentConfigName) {
+      elements.configName.value = currentConfigName;
+    }
+  }
+
+  // 应用选中的配置
+  function applyConfig(name) {
+    if (!apiConfigs[name]) {
+      // 新建配置 - 清空所有字段
+      elements.configName.value = '';
+      elements.apiEndpoint.value = '';
+      elements.apiKey.value = '';
+      elements.modelName.value = '';
+      currentConfigName = '';
+      return;
+    }
+
+    const config = apiConfigs[name];
+    elements.configName.value = name;
+    elements.apiEndpoint.value = config.endpoint || '';
+    elements.apiKey.value = config.apiKey || '';
+    elements.modelName.value = config.model || '';
+    currentConfigName = name;
+  }
+
+  // 保存当前配置
+  function saveCurrentConfig() {
+    const configName = elements.configName.value.trim();
+    const endpoint = elements.apiEndpoint.value.trim();
+    const apiKey = elements.apiKey.value.trim();
+    const model = elements.modelName.value.trim();
+
+    // 非空检测
+    if (!configName) {
+      showConfigToast('请输入配置名称', true);
+      elements.configName.focus();
+      return;
+    }
+    if (!endpoint) {
+      showConfigToast('请输入 API 端点', true);
+      elements.apiEndpoint.focus();
+      return;
+    }
+    if (!model) {
+      showConfigToast('请输入模型名称', true);
+      elements.modelName.focus();
+      return;
+    }
+
+    // 检查是否是重命名（当前选中的配置名与输入的不同）
+    const selectedConfig = elements.apiConfigSelect.value;
+    if (selectedConfig && selectedConfig !== configName && apiConfigs[selectedConfig]) {
+      // 删除旧名称的配置
+      delete apiConfigs[selectedConfig];
+    }
+
+    // 保存配置
+    apiConfigs[configName] = {
+      endpoint: endpoint,
+      apiKey: apiKey,
+      model: model
+    };
+
+    currentConfigName = configName;
+
+    // 保存到存储
+    chrome.storage.sync.set({
+      apiConfigs: apiConfigs,
+      currentApiConfig: currentConfigName,
+      apiEndpoint: endpoint,
+      apiKey: apiKey,
+      modelName: model
+    }, () => {
+      updateConfigSelect();
+      showConfigToast(`配置 "${configName}" 已保存`);
+    });
+  }
+
+  // 删除配置
+  function deleteCurrentConfig() {
+    const configName = elements.apiConfigSelect.value;
+    if (configName === '_new') return;
+
+    if (Object.keys(apiConfigs).length <= 1) {
+      alert('至少保留一个配置');
+      return;
+    }
+
+    if (!confirm(`确定要删除配置 "${configName}" 吗？`)) return;
+
+    delete apiConfigs[configName];
+    currentConfigName = Object.keys(apiConfigs)[0];
+
+    // 保存到存储并应用新配置
+    chrome.storage.sync.set({
+      apiConfigs: apiConfigs,
+      currentApiConfig: currentConfigName
+    }, () => {
+      updateConfigSelect();
+      applyConfig(currentConfigName);
+      // 同时更新当前使用的 API 配置
+      const config = apiConfigs[currentConfigName];
+      chrome.storage.sync.set({
+        apiEndpoint: config.endpoint,
+        apiKey: config.apiKey,
+        modelName: config.model
+      });
+      showConfigToast(`配置 "${configName}" 已删除`);
+    });
+  }
+
+  // 显示配置操作提示
+  function showConfigToast(message, isError = false) {
+    elements.testResult.textContent = message;
+    elements.testResult.className = isError ? 'test-result error' : 'test-result success';
+    setTimeout(() => {
+      elements.testResult.textContent = '';
+      elements.testResult.className = 'test-result';
+    }, 2000);
+  }
+
+  // 加载配置
+  async function loadSettings() {
+    // 先加载 API 配置列表
+    loadApiConfigs(() => {
+      // 应用当前选中的配置
+      if (currentConfigName && apiConfigs[currentConfigName]) {
+        applyConfig(currentConfigName);
+      }
+    });
+
+    chrome.storage.sync.get(null, (result) => {
+      // 主题
+      const theme = result.theme || 'dark';
+      applyTheme(theme);
+      elements.themeRadios.forEach(radio => {
+        radio.checked = radio.value === theme;
+      });
+
+      // API 配置（如果没有配置列表，使用直接存储的值作为后备）
+      if (!result.apiConfigs) {
+        elements.apiEndpoint.value = result.apiEndpoint || DEFAULT_API_CONFIGS['DeepSeek'].endpoint;
+        elements.apiKey.value = result.apiKey || '';
+        elements.modelName.value = result.modelName || DEFAULT_API_CONFIGS['DeepSeek'].model;
+      }
+
+      // 学习偏好
+      elements.nativeLanguage.value = result.nativeLanguage || 'zh-CN';
+      elements.targetLanguage.value = result.targetLanguage || 'en';
+
+      const diffIdx = CEFR_LEVELS.indexOf(result.difficultyLevel || 'B1');
+      elements.difficultyLevel.value = diffIdx >= 0 ? diffIdx : 2;
+      updateDifficultyLabel();
+
+      const intensity = result.intensity || 'medium';
+      elements.intensityRadios.forEach(radio => {
+        radio.checked = radio.value === intensity;
+      });
+
+      const processMode = result.processMode || 'both';
+      elements.processModeRadios.forEach(radio => {
+        radio.checked = radio.value === processMode;
+      });
+
+      // 行为设置
+      elements.autoProcess.checked = result.autoProcess ?? false;
+      elements.showPhonetic.checked = result.showPhonetic ?? true;
+      elements.showAddMemorize.checked = result.showAddMemorize ?? true;
+
+      const cacheMaxSize = result.cacheMaxSize || 2000;
+      elements.cacheMaxSizeRadios.forEach(radio => {
+        radio.checked = parseInt(radio.value) === cacheMaxSize;
+      });
+
+      const translationStyle = result.translationStyle || 'translation-original';
+      elements.translationStyleRadios.forEach(radio => {
+        radio.checked = radio.value === translationStyle;
+      });
+
+      // 站点规则
+      const siteMode = result.siteMode || 'all';
+      elements.siteModeRadios.forEach(radio => {
+        radio.checked = radio.value === siteMode;
+      });
+      updateSiteListVisibility(siteMode);
+      elements.excludedSitesInput.value = (result.excludedSites || result.blacklist || []).join('\n');
+      elements.allowedSitesInput.value = (result.allowedSites || []).join('\n');
+
+      // 发音设置
+      elements.ttsRate.value = result.ttsRate || 1.0;
+      elements.ttsRateValue.textContent = (result.ttsRate || 1.0).toFixed(1);
+
+      // 句子/段落翻译频率
+      elements.sentenceTranslationRate.value = result.sentenceTranslationRate ?? 0;
+      elements.sentenceTranslationRateValue.textContent = elements.sentenceTranslationRate.value;
+      elements.paragraphTranslationRate.value = result.paragraphTranslationRate ?? 0;
+      elements.paragraphTranslationRateValue.textContent = elements.paragraphTranslationRate.value;
+
+      // API 访问控制
+      elements.maxConcurrentRequests.value = result.maxConcurrentRequests ?? 1;
+      elements.maxConcurrentRequestsValue.textContent = elements.maxConcurrentRequests.value;
+      elements.apiRpmLimit.value = result.apiRpmLimit ?? 0;
+      elements.apiRpmLimitValue.textContent = elements.apiRpmLimit.value;
+      elements.apiRequestIntervalMs.value = result.apiRequestIntervalMs ?? 0;
+      elements.apiRequestIntervalMsValue.textContent = `${elements.apiRequestIntervalMs.value}ms`;
+
+      // 日志
+      const parsedRetentionDays = result.logRetentionDays === undefined || result.logRetentionDays === null
+        ? 7
+        : parseInt(result.logRetentionDays, 10);
+      currentLogRetentionDays = Number.isFinite(parsedRetentionDays) ? Math.max(0, parsedRetentionDays) : 7;
+      if (elements.logRetentionDays) {
+        elements.logRetentionDays.value = String(currentLogRetentionDays);
+      }
+
+      // 加载可用声音列表
+      loadVoices(result.ttsVoice || '');
+
+      // 加载词汇列表
+      loadWordLists(result);
+
+      // 加载统计
+      loadStats(result);
+    });
+  }
+
+  // 存储原始数据（用于搜索和筛选）
+  let allLearnedWords = [];
+  let allMemorizeWords = [];
+  let allCachedWords = [];
+
+  // 加载词汇列表
+  function loadWordLists(result) {
+    const learnedWords = result.learnedWords || [];
+    const memorizeList = result.memorizeList || [];
+
+    // 保存原始数据（包含难度信息）
+    allLearnedWords = learnedWords.map(w => ({
+      original: w.original,
+      word: w.word,
+      addedAt: w.addedAt,
+      difficulty: w.difficulty || 'B1' // 如果已学会词汇有难度信息则使用，否则默认B1
+    }));
+
+    allMemorizeWords = memorizeList.map(w => ({
+      original: w.word,
+      word: '',
+      addedAt: w.addedAt,
+      difficulty: w.difficulty || 'B1' // 如果需记忆词汇有难度信息则使用，否则默认B1
+    }));
+
+    // 更新计数
+    elements.learnedTabCount.textContent = learnedWords.length;
+    elements.memorizeTabCount.textContent = memorizeList.length;
+
+    // 应用搜索和筛选
+    filterLearnedWords();
+    filterMemorizeWords();
+
+    // 加载缓存
+    chrome.storage.local.get('vocabmeld_word_cache', (data) => {
+      const cache = data.vocabmeld_word_cache || [];
+      elements.cachedTabCount.textContent = cache.length;
+
+      const cacheWords = cache.map(item => {
+        const [word] = item.key.split(':');
+        return {
+          original: word,
+          word: item.translation,
+          addedAt: item.timestamp,
+          difficulty: item.difficulty || 'B1',
+          phonetic: item.phonetic || '',
+          cacheKey: item.key // 保存完整的缓存key用于删除
+        };
+      });
+
+      // 保存原始数据
+      allCachedWords = cacheWords;
+
+      // 应用搜索和筛选
+      filterCachedWords();
+    });
+  }
+
+  // 渲染词汇列表
+  function renderWordList(container, words, type) {
+    if (words.length === 0) {
+      container.innerHTML = '<div class="empty-list">暂无词汇</div>';
+      return;
+    }
+
+    container.innerHTML = words.map(w => `
+      <div class="word-item">
+        <button class="word-speak" data-word="${w.original}" title="播放发音">
+          <svg viewBox="0 0 24 24" width="16" height="16">
+            <path fill="currentColor" d="M14,3.23V5.29C16.89,6.15 19,8.83 19,12C19,15.17 16.89,17.84 14,18.7V20.77C18,19.86 21,16.28 21,12C21,7.72 18,4.14 14,3.23M16.5,12C16.5,10.23 15.5,8.71 14,7.97V16C15.5,15.29 16.5,13.76 16.5,12M3,9V15H7L12,20V4L7,9H3Z"/>
+          </svg>
+        </button>
+        <span class="word-original">${w.original}</span>
+        ${w.word ? `<span class="word-translation">${w.word}</span>` : ''}
+        ${w.difficulty ? `<span class="word-difficulty difficulty-${w.difficulty.toLowerCase()}">${w.difficulty}</span>` : ''}
+        <span class="word-date">${formatDate(w.addedAt)}</span>
+        ${type !== 'cached' ? `<button class="word-remove" data-word="${w.original}" data-type="${type}">&times;</button>` : `<button class="word-remove" data-key="${w.cacheKey || ''}" data-type="cached">&times;</button>`}
+      </div>
+    `).join('');
+
+    // 绑定发音事件
+    container.querySelectorAll('.word-speak').forEach(btn => {
+      btn.addEventListener('click', () => speakWord(btn.dataset.word));
+    });
+
+    // 绑定删除事件
+    container.querySelectorAll('.word-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.type === 'cached') {
+          removeCacheItem(btn.dataset.key);
+        } else {
+          removeWord(btn.dataset.word, btn.dataset.type);
+        }
+      });
+    });
+  }
+
+  // 删除单个缓存项
+  function removeCacheItem(key) {
+    if (!key) return;
+    chrome.storage.local.get('vocabmeld_word_cache', (data) => {
+      const cache = data.vocabmeld_word_cache || [];
+      const newCache = cache.filter(item => item.key !== key);
+      chrome.storage.local.set({ vocabmeld_word_cache: newCache }, () => {
+        loadSettings();
+      });
+    });
+  }
+
+  // 发音功能
+  function speakWord(word) {
+    if (!word) return;
+
+    // 检测语言
+    const isChinese = /[\u4e00-\u9fff]/.test(word);
+    const isJapanese = /[\u3040-\u309f\u30a0-\u30ff]/.test(word);
+    const isKorean = /[\uac00-\ud7af]/.test(word);
+
+    let lang = 'en-US';
+    if (isChinese) lang = 'zh-CN';
+    else if (isJapanese) lang = 'ja-JP';
+    else if (isKorean) lang = 'ko-KR';
+
+    chrome.runtime.sendMessage({ action: 'speak', text: word, lang });
+  }
+
+  // 搜索和筛选已学会词汇
+  function filterLearnedWords() {
+    const searchTerm = (elements.learnedSearchInput?.value || '').toLowerCase().trim();
+    const selectedDifficulty = document.querySelector('.difficulty-filter-btn.active[data-tab="learned"]')?.dataset.difficulty || 'all';
+
+    let filtered = allLearnedWords;
+
+    // 应用搜索
+    if (searchTerm) {
+      filtered = filtered.filter(w =>
+        w.original.toLowerCase().includes(searchTerm) ||
+        (w.word && w.word.toLowerCase().includes(searchTerm))
+      );
+    }
+
+    // 应用难度筛选
+    if (selectedDifficulty !== 'all') {
+      filtered = filtered.filter(w => w.difficulty === selectedDifficulty);
+    }
+
+    // 更新计数
+    elements.learnedTabCount.textContent = `${filtered.length} / ${allLearnedWords.length}`;
+
+    // 渲染筛选后的列表
+    renderWordList(elements.learnedList, filtered, 'learned');
+  }
+
+  // 搜索和筛选需记忆词汇
+  function filterMemorizeWords() {
+    const searchTerm = (elements.memorizeSearchInput?.value || '').toLowerCase().trim();
+    const selectedDifficulty = document.querySelector('.difficulty-filter-btn.active[data-tab="memorize"]')?.dataset.difficulty || 'all';
+
+    let filtered = allMemorizeWords;
+
+    // 应用搜索
+    if (searchTerm) {
+      filtered = filtered.filter(w =>
+        w.original.toLowerCase().includes(searchTerm) ||
+        (w.word && w.word.toLowerCase().includes(searchTerm))
+      );
+    }
+
+    // 应用难度筛选
+    if (selectedDifficulty !== 'all') {
+      filtered = filtered.filter(w => w.difficulty === selectedDifficulty);
+    }
+
+    // 更新计数
+    elements.memorizeTabCount.textContent = `${filtered.length} / ${allMemorizeWords.length}`;
+
+    // 渲染筛选后的列表
+    renderWordList(elements.memorizeList, filtered, 'memorize');
+  }
+
+  // 搜索和筛选缓存词汇
+  function filterCachedWords() {
+    const searchTerm = (elements.cachedSearchInput?.value || '').toLowerCase().trim();
+    const selectedDifficulty = document.querySelector('.difficulty-filter-btn.active[data-tab="cached"]')?.dataset.difficulty || 'all';
+
+    let filtered = allCachedWords;
+
+    // 应用搜索
+    if (searchTerm) {
+      filtered = filtered.filter(w =>
+        w.original.toLowerCase().includes(searchTerm) ||
+        (w.word && w.word.toLowerCase().includes(searchTerm))
+      );
+    }
+
+    // 应用难度筛选
+    if (selectedDifficulty !== 'all') {
+      filtered = filtered.filter(w => w.difficulty === selectedDifficulty);
+    }
+
+    // 更新计数
+    elements.cachedTabCount.textContent = `${filtered.length} / ${allCachedWords.length}`;
+
+    // 渲染筛选后的列表
+    renderWordList(elements.cachedList, filtered, 'cached');
+  }
+
+  // 格式化日期
+  function formatDate(timestamp) {
+    if (!timestamp) return '';
+    const date = new Date(timestamp);
+    return `${date.getMonth() + 1}/${date.getDate()}`;
+  }
+
+  // 删除词汇
+  async function removeWord(word, type) {
+    if (type === 'learned') {
+      chrome.storage.sync.get('learnedWords', (result) => {
+        const list = (result.learnedWords || []).filter(w => w.original !== word);
+        chrome.storage.sync.set({ learnedWords: list }, loadSettings);
+      });
+    } else if (type === 'memorize') {
+      chrome.storage.sync.get('memorizeList', (result) => {
+        const list = (result.memorizeList || []).filter(w => w.word !== word);
+        chrome.storage.sync.set({ memorizeList: list }, loadSettings);
+      });
+    }
+  }
+
+  // 加载统计数据
+  function loadStats(result) {
+    elements.statTotalWords.textContent = result.totalWords || 0;
+    elements.statTodayWords.textContent = result.todayWords || 0;
+    elements.statLearnedWords.textContent = (result.learnedWords || []).length;
+    elements.statMemorizeWords.textContent = (result.memorizeList || []).length;
+
+    const hits = result.cacheHits || 0;
+    const misses = result.cacheMisses || 0;
+    const total = hits + misses;
+    const hitRate = total > 0 ? Math.round((hits / total) * 100) : 0;
+    elements.statHitRate.textContent = hitRate + '%';
+
+    chrome.storage.local.get('vocabmeld_word_cache', (data) => {
+      const cacheSize = (data.vocabmeld_word_cache || []).length;
+      const checkedRadio = document.querySelector('input[name="cacheMaxSize"]:checked');
+      const maxSize = checkedRadio ? parseInt(checkedRadio.value) : 2000;
+      elements.statCacheSize.textContent = `${cacheSize}/${maxSize}`;
+      elements.cacheProgress.style.width = (cacheSize / maxSize * 100) + '%';
+    });
+  }
+
+  // 保存设置（静默保存）
+  async function saveSettings() {
+    const rawRetentionDays = elements.logRetentionDays?.value;
+    const parsedRetentionDays =
+      rawRetentionDays === '' || rawRetentionDays === undefined || rawRetentionDays === null
+        ? currentLogRetentionDays
+        : parseInt(rawRetentionDays, 10);
+    const logRetentionDays = Number.isFinite(parsedRetentionDays)
+      ? Math.max(0, parsedRetentionDays)
+      : currentLogRetentionDays;
+
+    const settings = {
+      theme: document.querySelector('input[name="theme"]:checked').value,
+      apiEndpoint: elements.apiEndpoint.value.trim(),
+      apiKey: elements.apiKey.value.trim(),
+      modelName: elements.modelName.value.trim(),
+      nativeLanguage: elements.nativeLanguage.value,
+      targetLanguage: elements.targetLanguage.value,
+      difficultyLevel: CEFR_LEVELS[elements.difficultyLevel.value],
+      intensity: document.querySelector('input[name="intensity"]:checked').value,
+      processMode: document.querySelector('input[name="processMode"]:checked')?.value || 'both',
+      autoProcess: elements.autoProcess.checked,
+      showPhonetic: elements.showPhonetic.checked,
+      showAddMemorize: elements.showAddMemorize.checked,
+      cacheMaxSize: parseInt(document.querySelector('input[name="cacheMaxSize"]:checked').value),
+      translationStyle: document.querySelector('input[name="translationStyle"]:checked').value,
+      ttsVoice: elements.ttsVoice.value,
+      ttsRate: parseFloat(elements.ttsRate.value),
+      sentenceTranslationRate: parseInt(elements.sentenceTranslationRate.value, 10) || 0,
+      paragraphTranslationRate: parseInt(elements.paragraphTranslationRate.value, 10) || 0,
+      maxConcurrentRequests: parseInt(elements.maxConcurrentRequests.value, 10) || 1,
+      apiRpmLimit: parseInt(elements.apiRpmLimit.value, 10) || 0,
+      apiRequestIntervalMs: parseInt(elements.apiRequestIntervalMs.value, 10) || 0,
+      logRetentionDays,
+      siteMode: document.querySelector('input[name="siteMode"]:checked').value,
+      excludedSites: elements.excludedSitesInput.value.split('\n').filter(s => s.trim()),
+      allowedSites: elements.allowedSitesInput.value.split('\n').filter(s => s.trim())
+    };
+
+    try {
+      await chrome.storage.sync.set(settings);
+      console.log('[VocabMeld] Settings saved automatically');
+
+      if (logRetentionDays !== currentLogRetentionDays) {
+        currentLogRetentionDays = logRetentionDays;
+        try {
+          await globalThis.VocabMeldLogger?.pruneLogs();
+          if (document.getElementById('logs')?.classList.contains('active')) {
+            refreshLogs();
+          }
+        } catch (err) {
+          console.error('[VocabMeld] Failed to prune logs after retention change:', err);
+        }
+      }
+    } catch (error) {
+      console.error('[VocabMeld] Failed to save settings:', error);
+    }
+  }
+
+  // 添加自动保存事件监听器
+  function addAutoSaveListeners() {
+    // 文本输入框 - 失焦时保存
+    const textInputs = [
+      elements.apiEndpoint,
+      elements.apiKey,
+      elements.modelName,
+      elements.excludedSitesInput,
+      elements.allowedSitesInput
+    ];
+
+    textInputs.forEach(input => {
+      input.addEventListener('blur', () => debouncedSave());
+      input.addEventListener('change', () => debouncedSave());
+    });
+
+    // 日志保留时间
+    if (elements.logRetentionDays) {
+      elements.logRetentionDays.addEventListener('blur', () => debouncedSave(200));
+      elements.logRetentionDays.addEventListener('change', () => debouncedSave(200));
+    }
+
+    // 下拉框 - 改变时保存
+    elements.nativeLanguage.addEventListener('change', () => debouncedSave(200));
+
+    // 缓存上限 - 改变时保存
+    elements.cacheMaxSizeRadios.forEach(radio => {
+      radio.addEventListener('change', () => debouncedSave(200));
+    });
+
+    // 站点模式切换
+    elements.siteModeRadios.forEach(radio => {
+      radio.addEventListener('change', () => {
+        updateSiteListVisibility(radio.value);
+        debouncedSave(200);
+      });
+    });
+
+    // 学习语言改变时，重新加载声音列表
+    elements.targetLanguage.addEventListener('change', () => {
+      debouncedSave(200);
+      // 重新加载声音列表，并重置不匹配的声音设置
+      loadVoices(elements.ttsVoice.value, true);
+    });
+
+    // 滑块 - 改变时保存
+    elements.difficultyLevel.addEventListener('input', () => debouncedSave(200));
+    elements.difficultyLevel.addEventListener('change', () => debouncedSave(200));
+
+    // 单选按钮 - 改变时保存
+    elements.intensityRadios.forEach(radio => {
+      radio.addEventListener('change', () => debouncedSave(200));
+    });
+
+    elements.processModeRadios.forEach(radio => {
+      radio.addEventListener('change', () => debouncedSave(200));
+    });
+
+    elements.translationStyleRadios.forEach(radio => {
+      radio.addEventListener('change', () => debouncedSave(200));
+    });
+
+    // 主题 - 改变时立即应用并保存
+    elements.themeRadios.forEach(radio => {
+      radio.addEventListener('change', () => {
+        applyTheme(radio.value);
+        debouncedSave(200);
+      });
+    });
+
+    // 开关 - 改变时保存
+    const checkboxes = [
+      elements.autoProcess,
+      elements.showPhonetic,
+      elements.showAddMemorize
+    ];
+
+    checkboxes.forEach(checkbox => {
+      checkbox.addEventListener('change', () => debouncedSave(200));
+    });
+
+    // 发音设置
+    elements.ttsVoice.addEventListener('change', () => debouncedSave(200));
+
+    elements.ttsRate.addEventListener('input', () => {
+      elements.ttsRateValue.textContent = parseFloat(elements.ttsRate.value).toFixed(1);
+    });
+    elements.ttsRate.addEventListener('change', () => debouncedSave(200));
+
+    // 句子/段落翻译频率
+    elements.sentenceTranslationRate.addEventListener('input', () => {
+      elements.sentenceTranslationRateValue.textContent = elements.sentenceTranslationRate.value;
+    });
+    elements.sentenceTranslationRate.addEventListener('change', () => debouncedSave(200));
+
+    elements.paragraphTranslationRate.addEventListener('input', () => {
+      elements.paragraphTranslationRateValue.textContent = elements.paragraphTranslationRate.value;
+    });
+    elements.paragraphTranslationRate.addEventListener('change', () => debouncedSave(200));
+
+    // 并行请求数
+    elements.maxConcurrentRequests.addEventListener('input', () => {
+      elements.maxConcurrentRequestsValue.textContent = elements.maxConcurrentRequests.value;
+    });
+    elements.maxConcurrentRequests.addEventListener('change', () => debouncedSave(200));
+
+    elements.apiRpmLimit.addEventListener('input', () => {
+      elements.apiRpmLimitValue.textContent = elements.apiRpmLimit.value;
+    });
+    elements.apiRpmLimit.addEventListener('change', () => debouncedSave(200));
+
+    elements.apiRequestIntervalMs.addEventListener('input', () => {
+      elements.apiRequestIntervalMsValue.textContent = `${elements.apiRequestIntervalMs.value}ms`;
+    });
+    elements.apiRequestIntervalMs.addEventListener('change', () => debouncedSave(200));
+
+    // 测试发音按钮
+    elements.testVoiceBtn.addEventListener('click', () => {
+      const targetLang = elements.targetLanguage.value;
+      const testTexts = {
+        'en': 'Hello, this is a voice test.',
+        'zh-CN': '你好，这是一个语音测试。',
+        'zh-TW': '你好，這是一個語音測試。',
+        'ja': 'こんにちは、これは音声テストです。',
+        'ko': '안녕하세요, 음성 테스트입니다.',
+        'fr': 'Bonjour, ceci est un test vocal.',
+        'de': 'Hallo, dies ist ein Sprachtest.',
+        'es': 'Hola, esta es una prueba de voz.'
+      };
+      const langCodes = {
+        'en': 'en-US',
+        'zh-CN': 'zh-CN',
+        'zh-TW': 'zh-TW',
+        'ja': 'ja-JP',
+        'ko': 'ko-KR',
+        'fr': 'fr-FR',
+        'de': 'de-DE',
+        'es': 'es-ES'
+      };
+      const testText = testTexts[targetLang] || testTexts['en'];
+      const lang = langCodes[targetLang] || 'en-US';
+
+      chrome.runtime.sendMessage({
+        action: 'speak',
+        text: testText,
+        lang: lang
+      });
+    });
+  }
+
+  // 更新难度标签
+  function updateDifficultyLabel() {
+    const level = CEFR_LEVELS[elements.difficultyLevel.value];
+    elements.selectedDifficulty.textContent = level;
+  }
+
+  function shortenLogUrl(url) {
+    if (!url) return '';
+    try {
+      const u = new URL(url);
+      return `${u.hostname}${u.pathname}`;
+    } catch {
+      return String(url);
+    }
+  }
+
+  function formatLogLine(entry) {
+    const ts = entry?.ts ? new Date(entry.ts).toLocaleString() : '';
+    const level = String(entry?.level || 'log').toUpperCase();
+    const ctx = entry?.context || 'unknown';
+
+    const parts = [];
+    if (ts) parts.push(`[${ts}]`);
+    parts.push(`[${level}]`, `[${ctx}]`);
+
+    const sourceUrl = shortenLogUrl(entry?.senderUrl || entry?.url);
+    if (sourceUrl) parts.push(`[${sourceUrl}]`);
+
+    if (entry?.tabId !== undefined && entry?.tabId !== null) {
+      parts.push(`[tab:${entry.tabId}]`);
+    }
+
+    const argsText = Array.isArray(entry?.args) ? entry.args.join(' ') : '';
+    return `${parts.join(' ')} ${argsText}`.trim();
+  }
+
+  async function refreshLogs() {
+    if (!elements.logsContent || !elements.logsSummary) return;
+
+    if (!globalThis.VocabMeldLogger?.getLogs) {
+      elements.logsSummary.textContent = '日志模块未加载';
+      elements.logsContent.textContent = '';
+      return;
+    }
+
+    elements.logsSummary.textContent = '加载中...';
+
+    try {
+      const { logs, total, retentionDays } = await globalThis.VocabMeldLogger.getLogs({ limit: 800 });
+      elements.logsContent.textContent = (logs || []).map(formatLogLine).join('\n');
+
+      const retentionText = retentionDays === 0 ? '不自动清除' : `${retentionDays} 天`;
+      elements.logsSummary.textContent = `共 ${total || 0} 条，显示最近 ${(logs || []).length} 条（保留：${retentionText}）`;
+    } catch (err) {
+      elements.logsSummary.textContent = `加载失败：${err?.message || String(err)}`;
+    }
+  }
+
+  // 切换到指定页面
+  function switchToSection(sectionId) {
+    elements.navItems.forEach(n => n.classList.remove('active'));
+    elements.sections.forEach(s => s.classList.remove('active'));
+
+    const navItem = document.querySelector(`.nav-item[data-section="${sectionId}"]`);
+    const section = document.getElementById(sectionId);
+
+    if (navItem && section) {
+      navItem.classList.add('active');
+      section.classList.add('active');
+    }
+
+    if (sectionId === 'logs') {
+      refreshLogs();
+    }
+  }
+
+  // 从 hash 加载页面
+  function loadSectionFromHash() {
+    const hash = window.location.hash.slice(1); // 去掉 #
+    if (hash) {
+      const section = document.getElementById(hash);
+      if (section) {
+        switchToSection(hash);
+      }
+    }
+  }
+
+  // 事件绑定
+  function bindEvents() {
+    // 导航切换
+    elements.navItems.forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.preventDefault();
+        const section = item.dataset.section;
+
+        // 更新 URL hash
+        window.location.hash = section;
+
+        switchToSection(section);
+      });
+    });
+
+    // 监听 hash 变化（浏览器前进后退）
+    window.addEventListener('hashchange', loadSectionFromHash);
+
+    // 日志
+    if (elements.refreshLogsBtn) {
+      elements.refreshLogsBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        refreshLogs();
+      });
+    }
+
+    if (elements.pruneLogsBtn) {
+      elements.pruneLogsBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        elements.pruneLogsBtn.disabled = true;
+        try {
+          await globalThis.VocabMeldLogger?.pruneLogs();
+          await refreshLogs();
+        } catch (err) {
+          console.error('[VocabMeld] Failed to prune logs:', err);
+        } finally {
+          elements.pruneLogsBtn.disabled = false;
+        }
+      });
+    }
+
+    if (elements.clearLogsBtn) {
+      elements.clearLogsBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        if (!confirm('确定要清空日志吗？')) return;
+        elements.clearLogsBtn.disabled = true;
+        try {
+          await globalThis.VocabMeldLogger?.clearLogs();
+          await refreshLogs();
+        } catch (err) {
+          console.error('[VocabMeld] Failed to clear logs:', err);
+        } finally {
+          elements.clearLogsBtn.disabled = false;
+        }
+      });
+    }
+
+    // 配置选择器
+    elements.apiConfigSelect.addEventListener('change', () => {
+      const selectedValue = elements.apiConfigSelect.value;
+      applyConfig(selectedValue);
+      // 切换配置时保存当前使用的配置
+      if (apiConfigs[selectedValue]) {
+        chrome.storage.sync.set({
+          currentApiConfig: selectedValue,
+          apiEndpoint: elements.apiEndpoint.value,
+          apiKey: elements.apiKey.value,
+          modelName: elements.modelName.value
+        });
+      }
+    });
+
+    // 新建配置按钮
+    elements.newConfigBtn.addEventListener('click', () => {
+      // 添加临时的"新建配置"选项并选中
+      const select = elements.apiConfigSelect;
+      let newOption = select.querySelector('option[value="_new"]');
+      if (!newOption) {
+        newOption = document.createElement('option');
+        newOption.value = '_new';
+        newOption.textContent = '— 新建配置 —';
+        select.insertBefore(newOption, select.firstChild);
+      }
+      select.value = '_new';
+
+      elements.configName.value = '';
+      elements.apiEndpoint.value = '';
+      elements.apiKey.value = '';
+      elements.modelName.value = '';
+      currentConfigName = '';
+      elements.configName.focus();
+    });
+
+    // 保存配置按钮
+    elements.saveConfigBtn.addEventListener('click', saveCurrentConfig);
+
+    // 删除配置按钮
+    elements.deleteConfigBtn.addEventListener('click', deleteCurrentConfig);
+
+    // 切换 API 密钥可见性
+    elements.toggleApiKey.addEventListener('click', () => {
+      const type = elements.apiKey.type === 'password' ? 'text' : 'password';
+      elements.apiKey.type = type;
+    });
+
+    // 测试连接
+    elements.testConnectionBtn.addEventListener('click', async () => {
+      elements.testConnectionBtn.disabled = true;
+      elements.testResult.textContent = '测试中...';
+      elements.testResult.className = 'test-result';
+
+      chrome.runtime.sendMessage({
+        action: 'testApi',
+        endpoint: elements.apiEndpoint.value,
+        apiKey: elements.apiKey.value,
+        model: elements.modelName.value
+      }, (response) => {
+        elements.testConnectionBtn.disabled = false;
+        if (response?.success) {
+          elements.testResult.textContent = '✓ 连接成功';
+          elements.testResult.className = 'test-result success';
+        } else {
+          elements.testResult.textContent = '✗ ' + (response?.message || '连接失败');
+          elements.testResult.className = 'test-result error';
+        }
+      });
+    });
+
+    // 难度滑块
+    elements.difficultyLevel.addEventListener('input', updateDifficultyLabel);
+
+    // 词汇标签切换
+    elements.wordTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        const tabName = tab.dataset.tab;
+
+        elements.wordTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+
+        document.querySelectorAll('.word-list').forEach(list => {
+          list.classList.toggle('hidden', list.dataset.tab !== tabName);
+        });
+
+        // 显示/隐藏搜索和筛选器
+        document.querySelectorAll('.word-filters').forEach(filter => {
+          filter.classList.toggle('hidden', filter.dataset.tab !== tabName);
+        });
+      });
+    });
+
+    // 初始化时检查当前激活的标签
+    const activeTab = document.querySelector('.word-tab.active');
+    if (activeTab) {
+      const tabName = activeTab.dataset.tab;
+      document.querySelectorAll('.word-filters').forEach(filter => {
+        filter.classList.toggle('hidden', filter.dataset.tab !== tabName);
+      });
+    }
+
+    // 搜索输入事件
+    if (elements.learnedSearchInput) {
+      elements.learnedSearchInput.addEventListener('input', () => {
+        filterLearnedWords();
+      });
+    }
+
+    if (elements.memorizeSearchInput) {
+      elements.memorizeSearchInput.addEventListener('input', () => {
+        filterMemorizeWords();
+      });
+    }
+
+    if (elements.cachedSearchInput) {
+      elements.cachedSearchInput.addEventListener('input', () => {
+        filterCachedWords();
+      });
+    }
+
+    // 难度筛选按钮事件
+    elements.difficultyFilterBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tab = btn.dataset.tab;
+        // 只激活同一tab的按钮
+        document.querySelectorAll(`.difficulty-filter-btn[data-tab="${tab}"]`).forEach(b => {
+          b.classList.remove('active');
+        });
+        btn.classList.add('active');
+
+        // 根据tab调用对应的筛选函数
+        if (tab === 'learned') {
+          filterLearnedWords();
+        } else if (tab === 'memorize') {
+          filterMemorizeWords();
+        } else if (tab === 'cached') {
+          filterCachedWords();
+        }
+      });
+    });
+
+    // 清空按钮
+    elements.clearLearnedBtn.addEventListener('click', () => {
+      if (confirm('确定要清空所有已学会词汇吗？')) {
+        chrome.runtime.sendMessage({ action: 'clearLearnedWords' }, () => {
+          loadSettings();
+          debouncedSave(200);
+        });
+      }
+    });
+
+    elements.clearMemorizeBtn.addEventListener('click', () => {
+      if (confirm('确定要清空需记忆列表吗？')) {
+        chrome.runtime.sendMessage({ action: 'clearMemorizeList' }, () => {
+          loadSettings();
+          debouncedSave(200);
+        });
+      }
+    });
+
+    elements.clearCacheBtn.addEventListener('click', () => {
+      if (confirm('确定要清空词汇缓存吗？')) {
+        chrome.runtime.sendMessage({ action: 'clearCache' }, () => {
+          loadSettings();
+          debouncedSave(200);
+        });
+      }
+    });
+
+    // 统计重置
+    elements.resetTodayBtn.addEventListener('click', () => {
+      chrome.storage.sync.set({ todayWords: 0 }, () => {
+        loadSettings();
+        debouncedSave(200);
+      });
+    });
+
+    elements.resetAllBtn.addEventListener('click', () => {
+      if (confirm('确定要重置所有数据吗？这将清空所有统计和词汇列表。')) {
+        chrome.storage.sync.set({
+          totalWords: 0,
+          todayWords: 0,
+          cacheHits: 0,
+          cacheMisses: 0,
+          learnedWords: [],
+          memorizeList: []
+        });
+        chrome.storage.local.remove('vocabmeld_word_cache', () => {
+          loadSettings();
+          debouncedSave(200);
+        });
+      }
+    });
+
+    // 导出数据
+    elements.exportDataBtn.addEventListener('click', async () => {
+      const exportData = {
+        version: '1.0',
+        exportDate: new Date().toISOString()
+      };
+
+      // 获取 sync 存储的数据
+      const syncData = await new Promise(resolve => chrome.storage.sync.get(null, resolve));
+
+      // 根据勾选项添加数据
+      if (elements.exportSettings.checked) {
+        exportData.settings = {
+          apiEndpoint: syncData.apiEndpoint,
+          apiKey: syncData.apiKey,
+          modelName: syncData.modelName,
+          apiConfigs: syncData.apiConfigs,
+          currentApiConfig: syncData.currentApiConfig,
+          nativeLanguage: syncData.nativeLanguage,
+          targetLanguage: syncData.targetLanguage,
+          difficultyLevel: syncData.difficultyLevel,
+          intensity: syncData.intensity,
+          autoProcess: syncData.autoProcess,
+          showPhonetic: syncData.showPhonetic,
+          showAddMemorize: syncData.showAddMemorize,
+          cacheMaxSize: syncData.cacheMaxSize,
+          translationStyle: syncData.translationStyle,
+          sentenceTranslationRate: syncData.sentenceTranslationRate,
+          paragraphTranslationRate: syncData.paragraphTranslationRate,
+          apiRpmLimit: syncData.apiRpmLimit,
+          apiRequestIntervalMs: syncData.apiRequestIntervalMs,
+          theme: syncData.theme,
+          ttsVoice: syncData.ttsVoice,
+          ttsRate: syncData.ttsRate,
+          siteMode: syncData.siteMode,
+          excludedSites: syncData.excludedSites,
+          allowedSites: syncData.allowedSites
+        };
+      }
+
+      if (elements.exportWords.checked) {
+        exportData.learnedWords = syncData.learnedWords || [];
+        exportData.memorizeList = syncData.memorizeList || [];
+      }
+
+      if (elements.exportStats.checked) {
+        exportData.stats = {
+          totalWords: syncData.totalWords,
+          todayWords: syncData.todayWords,
+          lastResetDate: syncData.lastResetDate,
+          cacheHits: syncData.cacheHits,
+          cacheMisses: syncData.cacheMisses
+        };
+      }
+
+      if (elements.exportCache.checked) {
+        const localData = await new Promise(resolve => chrome.storage.local.get('vocabmeld_word_cache', resolve));
+        exportData.cache = localData.vocabmeld_word_cache || [];
+      }
+
+      // 下载文件
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `vocabmeld-backup-${new Date().toISOString().split('T')[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    // 导入数据
+    elements.importDataBtn.addEventListener('click', () => {
+      elements.importFileInput.click();
+    });
+
+    elements.importFileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+
+        if (!data.version) {
+          alert('无效的备份文件');
+          return;
+        }
+
+        if (!confirm('导入将覆盖现有数据，确定继续吗？')) {
+          return;
+        }
+
+        const syncUpdates = {};
+        const localUpdates = {};
+
+        if (data.settings) {
+          Object.assign(syncUpdates, data.settings);
+        }
+        if (data.learnedWords) {
+          syncUpdates.learnedWords = data.learnedWords;
+        }
+        if (data.memorizeList) {
+          syncUpdates.memorizeList = data.memorizeList;
+        }
+        if (data.stats) {
+          Object.assign(syncUpdates, data.stats);
+        }
+        if (data.cache) {
+          localUpdates.vocabmeld_word_cache = data.cache;
+        }
+
+        // 保存数据
+        if (Object.keys(syncUpdates).length > 0) {
+          await new Promise(resolve => chrome.storage.sync.set(syncUpdates, resolve));
+        }
+        if (Object.keys(localUpdates).length > 0) {
+          await new Promise(resolve => chrome.storage.local.set(localUpdates, resolve));
+        }
+
+        alert('导入成功！页面将刷新。');
+        location.reload();
+      } catch (err) {
+        alert('导入失败：' + err.message);
+      }
+
+      // 重置文件输入
+      e.target.value = '';
+    });
+
+    // 添加自动保存事件监听器
+    addAutoSaveListeners();
+  }
+
+  // 初始化
+  bindEvents();
+  loadSettings();
+  loadSectionFromHash(); // 从 hash 恢复页面
+
+  // 监听 storage 变化（实时响应其他页面的主题切换）
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'sync' && changes.theme) {
+      const newTheme = changes.theme.newValue;
+      applyTheme(newTheme);
+      elements.themeRadios.forEach(radio => {
+        radio.checked = radio.value === newTheme;
+      });
+    }
+  });
+});
