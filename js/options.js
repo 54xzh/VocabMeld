@@ -39,6 +39,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     translationApiConfigSelect: document.getElementById('translationApiConfigSelect'),
     queryApiConfigSelect: document.getElementById('queryApiConfigSelect'),
     enableWordQuery: document.getElementById('enableWordQuery'),
+    wordQueryDefinitionDisplay: document.getElementById('wordQueryDefinitionDisplay'),
     newConfigBtn: document.getElementById('newConfigBtn'),
     saveConfigBtn: document.getElementById('saveConfigBtn'),
     deleteConfigBtn: document.getElementById('deleteConfigBtn'),
@@ -232,7 +233,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function updateQueryControlsEnabled() {
     if (!elements.enableWordQuery || !elements.queryApiConfigSelect) return;
-    elements.queryApiConfigSelect.disabled = !elements.enableWordQuery.checked;
+    const disabled = !elements.enableWordQuery.checked;
+    elements.queryApiConfigSelect.disabled = disabled;
+    if (elements.wordQueryDefinitionDisplay) {
+      elements.wordQueryDefinitionDisplay.disabled = disabled;
+    }
   }
 
   // 加载 API 配置列表
@@ -444,6 +449,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (elements.enableWordQuery) {
         elements.enableWordQuery.checked = result.enableWordQuery ?? false;
         updateQueryControlsEnabled();
+      }
+
+      // tooltip 释义显示语言
+      if (elements.wordQueryDefinitionDisplay) {
+        elements.wordQueryDefinitionDisplay.value = result.wordQueryDefinitionDisplay || 'both';
       }
 
       // API 角色选择（如果存在则优先用存储值）
@@ -825,6 +835,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       queryApiKey: (queryConfig.apiKey || '').trim(),
       queryModelName: (queryConfig.model || '').trim(),
       enableWordQuery: elements.enableWordQuery?.checked ?? false,
+      wordQueryDefinitionDisplay: elements.wordQueryDefinitionDisplay?.value || 'both',
 
       nativeLanguage: elements.nativeLanguage.value,
       targetLanguage: elements.targetLanguage.value,
@@ -890,6 +901,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 下拉框 - 改变时保存
     elements.nativeLanguage.addEventListener('change', () => debouncedSave(200));
+    if (elements.wordQueryDefinitionDisplay) {
+      elements.wordQueryDefinitionDisplay.addEventListener('change', () => debouncedSave(200));
+    }
 
     // 缓存上限 - 改变时保存
     elements.cacheMaxSizeRadios.forEach(radio => {

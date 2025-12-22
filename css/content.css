@@ -78,6 +78,10 @@
   color: #1e293b !important;
 }
 
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-def-text-zh {
+  color: #334155 !important;
+}
+
 .vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-chip {
   background: rgba(79, 70, 229, 0.10) !important;
   border: 1px solid rgba(79, 70, 229, 0.18) !important;
@@ -326,6 +330,16 @@
   padding: 0 !important;
 }
 
+.vocabmeld-tooltip .vocabmeld-tooltip-query-defs-block {
+  margin-top: 4px !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-defs-label {
+  font-size: 11px !important;
+  color: #94a3b8 !important;
+  margin-bottom: 2px !important;
+}
+
 .vocabmeld-tooltip .vocabmeld-tooltip-query-def-item {
   display: flex !important;
   gap: 6px !important;
@@ -343,6 +357,10 @@
   font-size: 12px !important;
   line-height: 1.45 !important;
   flex: 1 1 auto !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-def-text-zh {
+  color: #cbd5e1 !important;
 }
 
 .vocabmeld-tooltip .vocabmeld-tooltip-query-chips {

@@ -268,7 +268,10 @@
   }
 
   function makeWordQueryCacheKey(word) {
-    return normalizeWordQueryText(word).toLowerCase();
+    const normalized = normalizeWordQueryText(word).toLowerCase();
+    if (!normalized) return '';
+    // v2: bilingual meanings (en+zh)
+    return `v2:${normalized}`;
   }
 
   function evictWordQueryCacheToMaxSize(maxSize) {
@@ -358,6 +361,7 @@
           queryModelName: result.queryModelName || result.modelName || 'deepseek-chat',
           queryApiConfig: result.queryApiConfig || result.translationApiConfig || result.currentApiConfig || '',
           enableWordQuery: result.enableWordQuery ?? false,
+          wordQueryDefinitionDisplay: result.wordQueryDefinitionDisplay || 'both',
           nativeLanguage: result.nativeLanguage || 'zh-CN',
           targetLanguage: result.targetLanguage || 'en',
           difficultyLevel: result.difficultyLevel || 'B1',
@@ -1168,17 +1172,35 @@
   function normalizeWordQueryResult(obj, fallbackWord) {
     const word = normalizeWordQueryText(obj?.word || fallbackWord);
     const partsOfSpeech = Array.isArray(obj?.parts_of_speech) ? obj.parts_of_speech.filter(Boolean).map(String) : [];
-    const meanings = Array.isArray(obj?.meanings) ? obj.meanings : [];
-    const normalizedMeanings = meanings
-      .map(m => ({
-        pos: String(m?.pos || '').trim(),
-        definitions: Array.isArray(m?.definitions) ? m.definitions.filter(Boolean).map(String).slice(0, 8) : []
-      }))
-      .filter(m => m.pos || m.definitions.length > 0)
-      .slice(0, 8);
+
+    const normalizeMeaningList = (raw) => {
+      const list = Array.isArray(raw) ? raw : [];
+      return list
+        .map(m => ({
+          pos: String(m?.pos || '').trim(),
+          definitions: Array.isArray(m?.definitions) ? m.definitions.filter(Boolean).map(String).slice(0, 8) : []
+        }))
+        .filter(m => m.pos || m.definitions.length > 0)
+        .slice(0, 8);
+    };
+
+    // Backward compatible:
+    // - old schema: meanings (English only)
+    // - new schema: meanings_en + meanings_zh
+    const meaningsEn = normalizeMeaningList(obj?.meanings_en || obj?.meaningsEn || obj?.meanings || []);
+    const meaningsZh = normalizeMeaningList(obj?.meanings_zh || obj?.meaningsZh || []);
     const inflections = Array.isArray(obj?.inflections) ? obj.inflections.filter(Boolean).map(String).slice(0, 16) : [];
     const collocations = Array.isArray(obj?.collocations) ? obj.collocations.filter(Boolean).map(String).slice(0, 20) : [];
-    return { word, parts_of_speech: partsOfSpeech, meanings: normalizedMeanings, inflections, collocations };
+    return {
+      word,
+      parts_of_speech: partsOfSpeech,
+      meanings_en: meaningsEn,
+      meanings_zh: meaningsZh,
+      // legacy field name (English only)
+      meanings: meaningsEn,
+      inflections,
+      collocations
+    };
   }
 
   async function queryWordDetailsEnglish(word) {
@@ -1188,7 +1210,11 @@
       throw new Error('Query API is not configured');
     }
 
-    const prompt = `You are an English dictionary assistant.
+    const zhVariant = String(config?.nativeLanguage || 'zh-CN').toLowerCase().includes('zh-tw')
+      ? 'Traditional Chinese'
+      : 'Simplified Chinese';
+
+    const prompt = `You are a bilingual English-Chinese dictionary assistant.
 
 Given the word/phrase: ${JSON.stringify(cleaned)}
 
@@ -1196,15 +1222,17 @@ Return ONLY valid JSON (no Markdown, no code fences) with this schema:
 {
   "word": string,
   "parts_of_speech": string[],
-  "meanings": [{"pos": string, "definitions": string[]}],
+  "meanings_en": [{"pos": string, "definitions": string[]}],
+  "meanings_zh": [{"pos": string, "definitions": string[]}],
   "inflections": string[],
   "collocations": string[]
 }
 
 Requirements:
 - Definitions must be in English, concise.
+- Chinese definitions must be in ${zhVariant}, concise.
 - Include common inflections/variants when applicable (e.g., plural, past, past participle, -ing, 3rd person singular, comparative/superlative).
-- Include common collocations/phrases (5-12 items).
+- Include common collocations/phrases (4-6 items).
 - Do NOT include example sentences.`;
 
     const apiResponse = await callApiViaBackgroundWith(config.queryApiEndpoint, config.queryApiKey, {
@@ -1227,13 +1255,17 @@ Requirements:
   }
 
   function createEmptyWordQueryResult(word) {
-    return {
+    const empty = {
       word: normalizeWordQueryText(word),
       parts_of_speech: [],
-      meanings: [],
+      meanings_en: [],
+      meanings_zh: [],
       inflections: [],
       collocations: []
     };
+    // legacy field name (English only)
+    empty.meanings = empty.meanings_en;
+    return empty;
   }
 
   function pushUnique(arr, value, maxLen = 50) {
@@ -1244,13 +1276,17 @@ Requirements:
     if (arr.length > maxLen) arr.splice(0, arr.length - maxLen);
   }
 
-  function getOrCreateMeaningBucket(result, pos) {
+  function getOrCreateMeaningBucket(result, pos, lang = 'en') {
     const p = String(pos || '').trim();
     if (!p) return null;
-    let bucket = result.meanings.find(m => m.pos === p);
+    const key = lang === 'zh' ? 'meanings_zh' : 'meanings_en';
+    if (!Array.isArray(result[key])) result[key] = [];
+    if (key === 'meanings_en') result.meanings = result[key]; // keep legacy alias updated
+
+    let bucket = result[key].find(m => m.pos === p);
     if (!bucket) {
       bucket = { pos: p, definitions: [] };
-      result.meanings.push(bucket);
+      result[key].push(bucket);
     }
     return bucket;
   }
@@ -1272,7 +1308,8 @@ Requirements:
     }
 
     if (type === 'meaning') {
-      const bucket = getOrCreateMeaningBucket(result, evt.pos);
+      const lang = String(evt.lang || evt.language || '').trim().toLowerCase() === 'zh' ? 'zh' : 'en';
+      const bucket = getOrCreateMeaningBucket(result, evt.pos, lang);
       if (!bucket) return null;
       pushUnique(bucket.definitions, evt.definition, 12);
       return null;
@@ -1302,25 +1339,31 @@ Requirements:
       return { promise: Promise.reject(new Error('Query API is not configured')), cancel: () => {} };
     }
 
-    const prompt = `You are an English dictionary assistant.
+    const zhVariant = String(config?.nativeLanguage || 'zh-CN').toLowerCase().includes('zh-tw')
+      ? 'Traditional Chinese'
+      : 'Simplified Chinese';
+
+    const prompt = `You are a bilingual English-Chinese dictionary assistant.
 
 Given the word/phrase: ${JSON.stringify(cleaned)}
 
 Stream output as NDJSON (one JSON object per line, no Markdown, no code fences).
 Event types (examples):
 - {"type":"meta","word":"...","parts_of_speech":["noun","verb"]}
-- {"type":"meaning","pos":"noun","definition":"..."}
+- {"type":"meaning","lang":"en","pos":"noun","definition":"..."}
+- {"type":"meaning","lang":"zh","pos":"noun","definition":"..."}
 - {"type":"inflection","value":"..."}
 - {"type":"collocation","value":"..."}
 - {"type":"final","data":{...full schema below...}}
 
 The final schema in the final event must be:
-{"word":string,"parts_of_speech":string[],"meanings":[{"pos":string,"definitions":string[]}],"inflections":string[],"collocations":string[]}
+{"word":string,"parts_of_speech":string[],"meanings_en":[{"pos":string,"definitions":string[]}],"meanings_zh":[{"pos":string,"definitions":string[]}],"inflections":string[],"collocations":string[]}
 
 Requirements:
 - Definitions must be in English, concise.
+- Chinese definitions must be in ${zhVariant}, concise.
 - Include common inflections/variants when applicable.
-- Include common collocations/phrases (5-12 items).
+- Include common collocations/phrases (4-6 items).
 - Do NOT include example sentences.`;
 
     const result = createEmptyWordQueryResult(cleaned);
@@ -2637,6 +2680,18 @@ ${uncached.join(', ')}
     document.body.appendChild(tooltip);
   }
 
+  function getWordQueryDefinitionDisplayMode() {
+    const mode = String(config?.wordQueryDefinitionDisplay || 'both').trim().toLowerCase();
+    if (mode === 'en' || mode === 'zh' || mode === 'both') return mode;
+    return 'both';
+  }
+
+  function getWordQueryTitleText() {
+    const mode = getWordQueryDefinitionDisplayMode();
+    const suffix = mode === 'en' ? '英文释义' : mode === 'zh' ? '中文释义' : '中英释义';
+    return `AI 查询（${suffix}）`;
+  }
+
   function buildTooltipQueryHtmlDisabled() {
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询</div>
@@ -2653,7 +2708,7 @@ ${uncached.join(', ')}
 
   function buildTooltipQueryHtmlLoading() {
     return `
-      <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
+      <div class="vocabmeld-tooltip-query-title">${getWordQueryTitleText()}</div>
       <div class="vocabmeld-tooltip-query-status">加载中…</div>
     `;
   }
@@ -2661,7 +2716,7 @@ ${uncached.join(', ')}
   function buildTooltipQueryHtmlStreaming(previewText) {
     const shown = String(previewText || '').slice(0, 4000);
     return `
-      <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
+      <div class="vocabmeld-tooltip-query-title">${getWordQueryTitleText()}</div>
       <div class="vocabmeld-tooltip-query-status">生成中…</div>
       <pre class="vocabmeld-tooltip-query-stream">${escapeHtml(shown)}</pre>
     `;
@@ -2669,7 +2724,7 @@ ${uncached.join(', ')}
 
   function buildTooltipQueryHtmlError(message) {
     return `
-      <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
+      <div class="vocabmeld-tooltip-query-title">${getWordQueryTitleText()}</div>
       <div class="vocabmeld-tooltip-query-status vocabmeld-tooltip-query-error">查询失败：${escapeHtml(message || '')}</div>
     `;
   }
@@ -2677,49 +2732,88 @@ ${uncached.join(', ')}
   function buildTooltipQueryHtmlData(data, { statusText = '', isPartial = false } = {}) {
     const safeWord = escapeHtml(data?.word || '');
     const parts = Array.isArray(data?.parts_of_speech) ? data.parts_of_speech : [];
-    const meanings = Array.isArray(data?.meanings) ? data.meanings : [];
+    const meaningsEn = Array.isArray(data?.meanings_en) ? data.meanings_en : (Array.isArray(data?.meanings) ? data.meanings : []);
+    const meaningsZh = Array.isArray(data?.meanings_zh) ? data.meanings_zh : [];
     const inflections = Array.isArray(data?.inflections) ? data.inflections : [];
     const collocations = Array.isArray(data?.collocations) ? data.collocations : [];
+    const displayMode = getWordQueryDefinitionDisplayMode();
 
     const partsLine = parts.length
       ? `<div class="vocabmeld-tooltip-query-meta"><span class="vocabmeld-tooltip-query-label">POS</span> ${escapeHtml(parts.join(', '))}</div>`
       : '';
 
-    const meaningsHtml = meanings.length
-      ? meanings.map(m => {
-          const pos = escapeHtml(m?.pos || '');
-          const defs = Array.isArray(m?.definitions) ? m.definitions : [];
-          const defsHtml = defs.length
-            ? `
-              <div class="vocabmeld-tooltip-query-defs">
-                ${defs.map((d, idx) => `
-                  <div class="vocabmeld-tooltip-query-def-item">
-                    <span class="vocabmeld-tooltip-query-def-idx">${idx + 1}.</span>
-                    <span class="vocabmeld-tooltip-query-def-text">${escapeHtml(d)}</span>
-                  </div>
-                `).join('')}
+    const byPosEn = new Map(
+      meaningsEn
+        .filter(m => m && typeof m === 'object')
+        .map(m => [String(m.pos || '').trim(), Array.isArray(m.definitions) ? m.definitions : []])
+        .filter(([pos]) => Boolean(pos))
+    );
+    const byPosZh = new Map(
+      meaningsZh
+        .filter(m => m && typeof m === 'object')
+        .map(m => [String(m.pos || '').trim(), Array.isArray(m.definitions) ? m.definitions : []])
+        .filter(([pos]) => Boolean(pos))
+    );
+
+    const posOrder = [];
+    for (const pos of byPosEn.keys()) posOrder.push(pos);
+    for (const pos of byPosZh.keys()) if (!byPosEn.has(pos)) posOrder.push(pos);
+
+    const renderDefs = (defs, { label = '', variant = 'en' } = {}) => {
+      const shown = (Array.isArray(defs) ? defs : []).filter(Boolean).slice(0, 8);
+      if (shown.length === 0) return '';
+      const labelHtml = label ? `<div class="vocabmeld-tooltip-query-defs-label">${escapeHtml(label)}</div>` : '';
+      const textClass = variant === 'zh' ? 'vocabmeld-tooltip-query-def-text vocabmeld-tooltip-query-def-text-zh' : 'vocabmeld-tooltip-query-def-text';
+      return `
+        <div class="vocabmeld-tooltip-query-defs-block">
+          ${labelHtml}
+          <div class="vocabmeld-tooltip-query-defs">
+            ${shown.map((d, idx) => `
+              <div class="vocabmeld-tooltip-query-def-item">
+                <span class="vocabmeld-tooltip-query-def-idx">${idx + 1}.</span>
+                <span class="${textClass}">${escapeHtml(d)}</span>
               </div>
-            `
+            `).join('')}
+          </div>
+        </div>
+      `;
+    };
+
+    const meaningsHtml = posOrder.length
+      ? posOrder.map((rawPos) => {
+          const pos = escapeHtml(rawPos);
+          const defsEn = byPosEn.get(rawPos) || [];
+          const defsZh = byPosZh.get(rawPos) || [];
+
+          const enBlock = displayMode !== 'zh'
+            ? renderDefs(defsEn, { label: displayMode === 'both' ? '英文' : '', variant: 'en' })
             : '';
+          const zhBlock = displayMode !== 'en'
+            ? renderDefs(defsZh, { label: displayMode === 'both' ? '中文' : '', variant: 'zh' })
+            : '';
+
+          if (!enBlock && !zhBlock) return '';
           return `
             <div class="vocabmeld-tooltip-query-sense">
               ${pos ? `<div class="vocabmeld-tooltip-query-pos">${pos}</div>` : ''}
-              ${defsHtml}
+              ${enBlock}
+              ${zhBlock}
             </div>
           `;
-        }).join('')
+        }).filter(Boolean).join('')
       : `<div class="vocabmeld-tooltip-query-status">${isPartial ? '等待内容…' : '暂无结果'}</div>`;
 
     const inflectionsHtml = inflections.length
       ? `<div class="vocabmeld-tooltip-query-meta"><span class="vocabmeld-tooltip-query-label">Inflections</span> ${escapeHtml(inflections.join(' · '))}</div>`
       : '';
 
-    const collocationsHtml = collocations.length
-      ? `<div class="vocabmeld-tooltip-query-chips">${collocations.map(c => `<span class="vocabmeld-tooltip-query-chip">${escapeHtml(c)}</span>`).join('')}</div>`
+    const shownCollocations = Array.isArray(collocations) ? collocations.filter(Boolean).slice(0, 5) : [];
+    const collocationsHtml = shownCollocations.length
+      ? `<div class="vocabmeld-tooltip-query-chips">${shownCollocations.map(c => `<span class="vocabmeld-tooltip-query-chip">${escapeHtml(c)}</span>`).join('')}</div>`
       : '';
 
     return `
-      <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
+      <div class="vocabmeld-tooltip-query-title">${getWordQueryTitleText()}</div>
       ${statusText ? `<div class="vocabmeld-tooltip-query-status">${escapeHtml(statusText)}</div>` : ''}
       ${safeWord ? `<div class="vocabmeld-tooltip-query-word">${safeWord}</div>` : ''}
       ${partsLine}
@@ -3158,6 +3252,27 @@ ${uncached.join(', ')}
           // 主题变化时更新 UI
           if (changes.theme) {
             updateUITheme();
+          }
+          // tooltip 释义显示语言变化时，立即刷新 tooltip（如果正在显示）
+          if (changes.wordQueryDefinitionDisplay && tooltip && tooltip.style.display === 'block') {
+            const container = tooltip.querySelector('.vocabmeld-tooltip-query');
+            const queryKey = tooltip.dataset.wordQueryKey || '';
+            const queryWord = tooltip.dataset.wordQueryWord || '';
+            if (container) {
+              let queryInnerHtml = '';
+              if (!config?.enableWordQuery) {
+                queryInnerHtml = buildTooltipQueryHtmlDisabled();
+              } else if (!config?.queryApiEndpoint || !config?.queryModelName) {
+                queryInnerHtml = buildTooltipQueryHtmlNotConfigured();
+              } else if (queryKey && wordQueryCache.get(queryKey)?.data) {
+                queryInnerHtml = buildTooltipQueryHtmlData(wordQueryCache.get(queryKey).data);
+              } else if (queryKey && queryWord) {
+                queryInnerHtml = buildTooltipQueryHtmlLoading();
+              } else {
+                queryInnerHtml = buildTooltipQueryHtmlError('无效单词');
+              }
+              container.innerHTML = queryInnerHtml;
+            }
           }
           // 影响渲染/翻译结果的配置变化时，需要重新处理页面
           if (
