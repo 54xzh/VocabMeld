@@ -75,6 +75,9 @@
   let tooltipHideTimeout = null; // tooltip 延迟隐藏计时器
   let activeTooltipTarget = null;
   let isTabActive = !document.hidden;
+  let retryFab = null;
+  let retryFabHideTimer = null;
+  let lastApiErrorContext = null; // { kind, word, at }
 
   // ============ 工具函数 ============
   function isDifficultyCompatible(wordDifficulty, userDifficulty) {
@@ -1438,6 +1441,63 @@ Requirements:
     return { promise, cancel: stream.cancel };
   }
 
+  function forceRetryWordQuery(word) {
+    const cleaned = normalizeWordQueryText(word);
+    const key = makeWordQueryCacheKey(cleaned);
+    if (!key) return;
+
+    // Cancel any active stream for this key
+    if (activeWordQueryStream?.key === key) {
+      try { activeWordQueryStream.cancel?.(); } catch {}
+      activeWordQueryStream = null;
+    }
+
+    wordQueryCache.delete(key);
+    wordQueryInFlight.delete(key);
+    scheduleSaveWordQueryCache(100);
+
+    if (!tooltip || tooltip.style.display !== 'block') return;
+    if (tooltip.dataset.wordQueryKey !== key) return;
+
+    const container = tooltip.querySelector('.vocabmeld-tooltip-query');
+    if (container) container.innerHTML = buildTooltipQueryHtmlLoading();
+
+    let hasStructuredUpdate = false;
+    const stream = prefetchWordQueryStreaming(cleaned, {
+      onPartialData: (partial) => {
+        hasStructuredUpdate = true;
+        if (!tooltip || tooltip.style.display !== 'block') return;
+        if (tooltip.dataset.wordQueryKey !== key) return;
+        const liveContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+        if (!liveContainer) return;
+        liveContainer.innerHTML = buildTooltipQueryHtmlData(partial, { statusText: '生成中…', isPartial: true });
+      },
+      onRawText: (text) => {
+        if (hasStructuredUpdate) return;
+        if (!tooltip || tooltip.style.display !== 'block') return;
+        if (tooltip.dataset.wordQueryKey !== key) return;
+        const liveContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+        if (!liveContainer) return;
+        liveContainer.innerHTML = buildTooltipQueryHtmlStreaming(text);
+      }
+    });
+
+    activeWordQueryStream = { key, cancel: stream.cancel };
+
+    stream.promise.then((data) => {
+      if (!tooltip || tooltip.style.display !== 'block') return;
+      if (tooltip.dataset.wordQueryKey !== key) return;
+      const finalContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+      if (finalContainer) finalContainer.innerHTML = buildTooltipQueryHtmlData(data);
+    }).catch((err) => {
+      if (!tooltip || tooltip.style.display !== 'block') return;
+      if (tooltip.dataset.wordQueryKey !== key) return;
+      const errorContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+      if (errorContainer) errorContainer.innerHTML = buildTooltipQueryHtmlError(err?.message || String(err));
+      showRetryFab({ kind: 'wordQuery', word: cleaned, at: Date.now() });
+    });
+  }
+
   async function translateParagraphToTarget(text, sourceLang, targetLang) {
     const limited = (text || '').slice(0, MAX_INLINE_TRANSLATION_CHARS);
     const prompt = `请将下面的文本从 ${sourceLang} 翻译为 ${targetLang}（学习语言）。\n\n要求：\n- 保持原意、自然流畅\n- 不要添加解释、不要总结\n- 只输出翻译后的文本\n\n文本：\n${limited}`;
@@ -2727,6 +2787,7 @@ ${uncached.join(', ')}
         if (tooltip.dataset.wordQueryKey !== queryKey) return;
         const errorContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
         if (errorContainer) errorContainer.innerHTML = buildTooltipQueryHtmlError(err?.message || String(err));
+        showRetryFab({ kind: 'wordQuery', word: queryWord, at: Date.now() });
       });
     }
   }
@@ -2769,6 +2830,42 @@ ${uncached.join(', ')}
       toast.classList.remove('vocabmeld-toast-show');
       setTimeout(() => toast.remove(), 300);
     }, 2000);
+  }
+
+  function ensureRetryFab() {
+    if (retryFab) return;
+    retryFab = document.createElement('button');
+    retryFab.className = 'vocabmeld-retry-fab';
+    retryFab.type = 'button';
+    retryFab.textContent = '重试';
+    retryFab.style.display = 'none';
+    retryFab.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // 优先重试当前 tooltip 的单词查询
+      if (tooltip?.style.display === 'block' && activeTooltipTarget?.classList?.contains('vocabmeld-translated')) {
+        const word = activeTooltipTarget.getAttribute('data-translation') || '';
+        forceRetryWordQuery(word);
+        return;
+      }
+
+      // 否则尝试让后台重置队列
+      chrome.runtime.sendMessage({ action: 'resetApiQueue' }, () => {});
+      showToast('已请求重试');
+    });
+    document.body.appendChild(retryFab);
+  }
+
+  function showRetryFab(context) {
+    ensureRetryFab();
+    lastApiErrorContext = context || null;
+    if (!retryFab) return;
+    retryFab.style.display = 'block';
+    clearTimeout(retryFabHideTimer);
+    retryFabHideTimer = setTimeout(() => {
+      if (retryFab) retryFab.style.display = 'none';
+    }, 12000);
   }
 
   function createSelectionPopup() {
@@ -3072,6 +3169,7 @@ ${uncached.join(', ')}
     
     createTooltip();
     createSelectionPopup();
+    ensureRetryFab();
     
     // 初始化 IntersectionObserver
     setupIntersectionObserver();

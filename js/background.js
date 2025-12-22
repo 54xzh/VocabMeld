@@ -308,8 +308,11 @@ async function processApiQueue() {
     // 调度下一个请求
     async function scheduleNext() {
       const maxConcurrent = apiRateConfig.maxConcurrentRequests || 1;
-      const reservedForQuery = maxConcurrent >= 2 ? 1 : 0;
-      const maxTranslationConcurrent = Math.max(0, maxConcurrent - reservedForQuery);
+      const QUERY_RESERVED_SLOTS = 5;
+      const wantsQuerySlots = (queryRequestQueue.length > 0 || activeQueryRequestCount > 0);
+      // Reserve up to 5 slots for query, but keep at least 1 slot for translation.
+      const reservedForQuery = wantsQuerySlots ? Math.min(QUERY_RESERVED_SLOTS, Math.max(0, maxConcurrent - 1)) : 0;
+      const maxTranslationConcurrent = wantsQuerySlots ? Math.max(0, maxConcurrent - reservedForQuery) : maxConcurrent;
 
       while ((queryRequestQueue.length > 0 || apiRequestQueue.length > 0) && activeRequestCount < maxConcurrent) {
         const now = Date.now();
@@ -329,10 +332,8 @@ async function processApiQueue() {
           continue;
         }
 
-        // 再调度翻译队列，但不占用为查询预留的并发槽位
-        if (activeTranslationRequestCount >= maxTranslationConcurrent) {
-          return;
-        }
+        // 再调度翻译队列，但不占用为查询预留的并发槽位（查询不活跃时不限制）
+        if (activeTranslationRequestCount >= maxTranslationConcurrent) return;
 
         item = pickNextQueueItem(apiRequestQueue, activeTabId);
         if (!item) continue;
@@ -349,7 +350,12 @@ async function processApiQueue() {
     }
 
     // 开始调度
-    scheduleNext();
+    try {
+      scheduleNext();
+    } catch (e) {
+      console.error('[VocabMeld][API] scheduleNext crashed:', e);
+      apiQueueProcessing = false;
+    }
 
   } catch (error) {
     console.error('[VocabMeld][API] Queue processing error:', error);
@@ -463,6 +469,22 @@ chrome.commands.onCommand.addListener((command, tab) => {
 
 // 消息处理
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // 手动重置队列（用于恢复偶发卡死）
+  if (message.action === 'resetApiQueue') {
+    try {
+      if (activeRequestCount === 0) {
+        activeTranslationRequestCount = 0;
+        activeQueryRequestCount = 0;
+      }
+      apiQueueProcessing = false;
+      processApiQueue()
+        .then(() => safeSendResponse(sendResponse, { success: true }))
+        .catch((err) => safeSendResponse(sendResponse, { success: false, error: err?.message || String(err) }));
+    } catch (err) {
+      safeSendResponse(sendResponse, { success: false, error: err?.message || String(err) });
+    }
+    return true;
+  }
   // 语音合成
   if (message.action === 'speak') {
     const text = message.text;
