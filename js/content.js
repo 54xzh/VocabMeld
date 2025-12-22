@@ -76,10 +76,7 @@
   let tooltipHideTimeout = null; // tooltip 延迟隐藏计时器
   let activeTooltipTarget = null;
   let isTabActive = !document.hidden;
-  let retryFab = null;
-  let retryFabHideTimer = null;
-  let lastApiErrorContext = null; // { kind, word, at }
-  let wordQueryLoadingTimeoutTimer = null;
+  // removed: global retry FAB (deduped)
 
   // ============ 工具函数 ============
   function isDifficultyCompatible(wordDifficulty, userDifficulty) {
@@ -328,11 +325,6 @@
     wordQueryCacheSaveTimer = setTimeout(() => {
       saveWordQueryCache().catch(() => {});
     }, delay);
-  }
-
-  function hideRetryFab() {
-    clearTimeout(retryFabHideTimer);
-    if (retryFab) retryFab.style.display = 'none';
   }
 
   function notifyWordQueryListeners(entry, kind, payload) {
@@ -1536,7 +1528,6 @@ Requirements:
       if (tooltip.dataset.wordQueryKey !== key) return;
       const errorContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
       if (errorContainer) errorContainer.innerHTML = buildTooltipQueryHtmlError(err?.message || String(err));
-      showRetryFab({ kind: 'wordQuery', word: cleaned, at: Date.now() });
     });
   }
 
@@ -2796,20 +2787,11 @@ ${uncached.join(', ')}
       </div>
     `;
 
-    const rect = element.getBoundingClientRect();
-    tooltip.style.left = rect.left + window.scrollX + 'px';
-    tooltip.style.top = rect.bottom + window.scrollY + 5 + 'px';
+    positionTooltipForElement(element);
     tooltip.style.display = 'block';
     activeTooltipTarget = element;
 
     if (shouldFetchQuery && queryWord) {
-      clearTimeout(wordQueryLoadingTimeoutTimer);
-      wordQueryLoadingTimeoutTimer = setTimeout(() => {
-        if (!tooltip || tooltip.style.display !== 'block') return;
-        if (tooltip.dataset.wordQueryKey !== queryKey) return;
-        showRetryFab({ kind: 'wordQuery', word: queryWord, at: Date.now() });
-      }, 2500);
-
       let hasStructuredUpdate = false;
       const stream = prefetchWordQueryStreaming(queryWord, {
         onPartialData: (partial) => {
@@ -2833,21 +2815,56 @@ ${uncached.join(', ')}
       activeWordQueryStream = { key: queryKey, cancel: stream.cancel };
 
       stream.promise.then((data) => {
-        clearTimeout(wordQueryLoadingTimeoutTimer);
-        hideRetryFab();
         if (!tooltip || tooltip.style.display !== 'block') return;
         if (tooltip.dataset.wordQueryKey !== queryKey) return;
         const finalContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
         if (finalContainer) finalContainer.innerHTML = buildTooltipQueryHtmlData(data);
       }).catch((err) => {
-        clearTimeout(wordQueryLoadingTimeoutTimer);
         if (!tooltip || tooltip.style.display !== 'block') return;
         if (tooltip.dataset.wordQueryKey !== queryKey) return;
         const errorContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
         if (errorContainer) errorContainer.innerHTML = buildTooltipQueryHtmlError(err?.message || String(err));
-        showRetryFab({ kind: 'wordQuery', word: queryWord, at: Date.now() });
       });
     }
+  }
+
+  function positionTooltipForElement(element) {
+    if (!tooltip || !element?.getBoundingClientRect) return;
+    const rect = element.getBoundingClientRect();
+    const left = rect.left + window.scrollX;
+    const top = rect.bottom + window.scrollY + 5;
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+  }
+
+  function refreshTooltipPosition() {
+    if (!tooltip || tooltip.style.display !== 'block') return;
+    if (!activeTooltipTarget || !document.contains(activeTooltipTarget)) {
+      hideTooltip(true);
+      return;
+    }
+    positionTooltipForElement(activeTooltipTarget);
+  }
+
+  function elementHasDirectNonWhitespaceText(el) {
+    if (!el?.childNodes) return false;
+    for (const node of Array.from(el.childNodes)) {
+      if (node?.nodeType === Node.TEXT_NODE && String(node.nodeValue || '').trim()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isBlankClickTarget(target) {
+    const el = target?.nodeType === Node.TEXT_NODE ? target.parentElement : target;
+    if (!el || el === document) return true;
+    if (el === document.body || el === document.documentElement) return true;
+    if (el.isContentEditable) return false;
+    if (el.closest?.('a,button,input,textarea,select,option,label,summary,[role="button"],[role="link"]')) return false;
+    // If the clicked element itself contains meaningful text, treat as non-blank.
+    if (elementHasDirectNonWhitespaceText(el)) return false;
+    return true;
   }
 
   function hideTooltip(immediate = false) {
@@ -2857,7 +2874,6 @@ ${uncached.join(', ')}
       activeTooltipTarget = null;
       if (tooltip) tooltip.dataset.wordQueryKey = '';
       if (tooltip) tooltip.dataset.wordQueryWord = '';
-      clearTimeout(wordQueryLoadingTimeoutTimer);
       if (activeWordQueryStream?.cancel) {
         try { activeWordQueryStream.cancel(); } catch {}
       }
@@ -2869,7 +2885,6 @@ ${uncached.join(', ')}
         activeTooltipTarget = null;
         if (tooltip) tooltip.dataset.wordQueryKey = '';
         if (tooltip) tooltip.dataset.wordQueryWord = '';
-        clearTimeout(wordQueryLoadingTimeoutTimer);
         if (activeWordQueryStream?.cancel) {
           try { activeWordQueryStream.cancel(); } catch {}
         }
@@ -2892,60 +2907,6 @@ ${uncached.join(', ')}
       toast.classList.remove('vocabmeld-toast-show');
       setTimeout(() => toast.remove(), 300);
     }, 2000);
-  }
-
-  function ensureRetryFab() {
-    if (retryFab) return;
-    retryFab = document.createElement('button');
-    retryFab.className = 'vocabmeld-retry-fab';
-    retryFab.type = 'button';
-    retryFab.textContent = '重试';
-    retryFab.style.display = 'none';
-    retryFab.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-
-      // 优先重试当前 tooltip 的单词查询
-      if (tooltip?.style.display === 'block' && activeTooltipTarget?.classList?.contains('vocabmeld-translated')) {
-        const word = activeTooltipTarget.getAttribute('data-translation') || '';
-        forceRetryWordQuery(word);
-        return;
-      }
-
-      // 如果最近是单词查询报错，预取一次刷新缓存（不弹出）
-      if (lastApiErrorContext?.kind === 'wordQuery' && lastApiErrorContext?.word) {
-        const w = lastApiErrorContext.word;
-        // 清理旧 in-flight，避免复用卡住
-        const k = makeWordQueryCacheKey(w);
-        if (k) {
-          const existing = wordQueryInFlight.get(k);
-          if (existing?.cancel) {
-            try { existing.cancel(); } catch {}
-          }
-          wordQueryInFlight.delete(k);
-          wordQueryCache.delete(k);
-        }
-        prefetchWordQueryStreaming(w, {}).promise.catch(() => {});
-        showToast('已开始重试查询');
-        return;
-      }
-
-      // 否则尝试让后台重置队列
-      chrome.runtime.sendMessage({ action: 'resetApiQueue' }, () => {});
-      showToast('已请求重试');
-    });
-    document.body.appendChild(retryFab);
-  }
-
-  function showRetryFab(context) {
-    ensureRetryFab();
-    lastApiErrorContext = context || null;
-    if (!retryFab) return;
-    retryFab.style.display = 'block';
-    clearTimeout(retryFabHideTimer);
-    retryFabHideTimer = setTimeout(() => {
-      if (retryFab) retryFab.style.display = 'none';
-    }, 60000);
   }
 
   function createSelectionPopup() {
@@ -3014,6 +2975,8 @@ ${uncached.join(', ')}
 
     // tooltip 按钮点击事件
     document.addEventListener('click', (e) => {
+      const clickTarget = e.target;
+
       const retryBtn = e.target.closest?.('.vocabmeld-btn-retry');
       if (retryBtn) {
         e.preventDefault();
@@ -3108,8 +3071,10 @@ ${uncached.join(', ')}
       // 点击 tooltip 内部：不隐藏（按钮逻辑已在上面处理）
       if (e.target.closest('.vocabmeld-tooltip')) return;
 
-      // 点击页面其他位置：隐藏 tooltip
-      hideTooltip(true);
+      // 仅点击页面空白处才关闭 tooltip（避免滚动/点击内容时误关）
+      if (isBlankClickTarget(clickTarget)) {
+        hideTooltip(true);
+      }
     });
 
     // Esc 关闭 tooltip
@@ -3150,11 +3115,15 @@ ${uncached.join(', ')}
       }, 10);
     });
 
-    // 滚动处理（懒加载）- 使用 IntersectionObserver 时，滚动时重新观察新容器
+    // 滚动时不关闭 tooltip，改为跟随锚点重新定位
     const handleScroll = debounce(() => {
-      if (tooltip?.style.display === 'block') hideTooltip(true);
-    }, 300);
+      refreshTooltipPosition();
+    }, 50);
     window.addEventListener('scroll', handleScroll, { passive: true });
+
+    window.addEventListener('resize', debounce(() => {
+      refreshTooltipPosition();
+    }, 100), { passive: true });
 
     // 监听 DOM 变化，观察新增的文本容器
     const mutationObserver = new MutationObserver(debounce(() => {
@@ -3273,7 +3242,6 @@ ${uncached.join(', ')}
     
     createTooltip();
     createSelectionPopup();
-    ensureRetryFab();
     
     // 初始化 IntersectionObserver
     setupIntersectionObserver();
