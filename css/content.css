@@ -61,6 +61,12 @@
   color: #0f172a !important;
 }
 
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-retry {
+  background: rgba(241, 245, 249, 0.95) !important;
+  border: 1px solid rgba(79, 70, 229, 0.25) !important;
+  color: #1e293b !important;
+}
+
 .vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-meta {
   color: #334155 !important;
 }
@@ -258,6 +264,33 @@
 .vocabmeld-tooltip .vocabmeld-tooltip-query-status {
   font-size: 12px !important;
   color: #94a3b8 !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-actions {
+  display: flex !important;
+  justify-content: flex-end !important;
+  margin-top: 6px !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-retry {
+  margin-top: 0 !important;
+  padding: 6px 10px !important;
+  border-radius: 8px !important;
+  border: 1px solid rgba(129, 140, 248, 0.35) !important;
+  background: rgba(51, 65, 85, 0.65) !important;
+  color: #e2e8f0 !important;
+  font-size: 12px !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-retry:hover {
+  background: rgba(71, 85, 105, 0.75) !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-retry:disabled {
+  opacity: 0.55 !important;
+  cursor: not-allowed !important;
 }
 
 .vocabmeld-tooltip .vocabmeld-tooltip-query-stream {

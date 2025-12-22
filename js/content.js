@@ -61,10 +61,11 @@
   let processedFingerprints = new Set();
   let wordCache = new Map();
   let wordQueryCache = new Map(); // key -> { data, savedAt }
-  let wordQueryInFlight = new Map(); // key -> Promise
+  let wordQueryInFlight = new Map(); // key -> { promise, cancel, listeners, state }
   let wordQueryCacheSaveTimer = null;
   let wordQueryHoverTimer = null;
   let lastWordQueryHoverKey = '';
+  let wordQueryHoverStream = null; // { key, cancel }
   let activeWordQueryStream = null; // { key, cancel }
   let cachedCjkWordsByLangPair = new Map(); // `${sourceLang}:${targetLang}` -> Set(lowerCjkWord)
   let tooltip = null;
@@ -78,6 +79,7 @@
   let retryFab = null;
   let retryFabHideTimer = null;
   let lastApiErrorContext = null; // { kind, word, at }
+  let wordQueryLoadingTimeoutTimer = null;
 
   // ============ 工具函数 ============
   function isDifficultyCompatible(wordDifficulty, userDifficulty) {
@@ -326,6 +328,28 @@
     wordQueryCacheSaveTimer = setTimeout(() => {
       saveWordQueryCache().catch(() => {});
     }, delay);
+  }
+
+  function hideRetryFab() {
+    clearTimeout(retryFabHideTimer);
+    if (retryFab) retryFab.style.display = 'none';
+  }
+
+  function notifyWordQueryListeners(entry, kind, payload) {
+    if (!entry?.listeners || entry.listeners.size === 0) return;
+    for (const listener of Array.from(entry.listeners)) {
+      try {
+        if (kind === 'partial' && typeof listener.onPartialData === 'function') {
+          listener.onPartialData(payload);
+        } else if (kind === 'raw' && typeof listener.onRawText === 'function') {
+          listener.onRawText(payload);
+        } else if (kind === 'done' && typeof listener.onDone === 'function') {
+          listener.onDone(payload);
+        } else if (kind === 'error' && typeof listener.onError === 'function') {
+          listener.onError(payload);
+        }
+      } catch {}
+    }
   }
 
   // ============ 存储操作 ============
@@ -1384,35 +1408,11 @@ Requirements:
   }
 
   function prefetchWordQuery(word) {
-    if (!config?.enableWordQuery) return Promise.resolve(null);
-    const key = makeWordQueryCacheKey(word);
-    if (!key) return Promise.resolve(null);
-
-    const cached = wordQueryCache.get(key);
-    if (cached?.data) {
-      // LRU refresh
-      wordQueryCache.delete(key);
-      wordQueryCache.set(key, cached);
-      return Promise.resolve(cached.data);
-    }
-
-    if (wordQueryInFlight.has(key)) return wordQueryInFlight.get(key);
-
-    const promise = queryWordDetailsEnglish(word)
-      .then((data) => {
-        upsertWordQueryCacheItem(key, data);
-        scheduleSaveWordQueryCache();
-        return data;
-      })
-      .finally(() => {
-        wordQueryInFlight.delete(key);
-      });
-
-    wordQueryInFlight.set(key, promise);
-    return promise;
+    // Backward compatible wrapper: do a query request and cache result (no UI updates)
+    return prefetchWordQueryStreaming(word, {}).promise;
   }
 
-  function prefetchWordQueryStreaming(word, { onPartialData, onRawText } = {}) {
+  function prefetchWordQueryStreaming(word, { onPartialData, onRawText, onDone, onError } = {}) {
     if (!config?.enableWordQuery) return { promise: Promise.resolve(null), cancel: () => {} };
     const key = makeWordQueryCacheKey(word);
     if (!key) return { promise: Promise.resolve(null), cancel: () => {} };
@@ -1424,21 +1424,58 @@ Requirements:
       return { promise: Promise.resolve(cached.data), cancel: () => {} };
     }
 
-    if (wordQueryInFlight.has(key)) {
-      return { promise: wordQueryInFlight.get(key), cancel: () => {} };
+    const existing = wordQueryInFlight.get(key);
+    if (existing?.promise) {
+      if (onPartialData || onRawText || onDone || onError) {
+        existing.listeners.add({ onPartialData, onRawText, onDone, onError });
+        if (existing.state?.hasStructured && typeof onPartialData === 'function') {
+          try { onPartialData(existing.state.partial); } catch {}
+        } else if (existing.state?.rawText && typeof onRawText === 'function') {
+          try { onRawText(existing.state.rawText); } catch {}
+        }
+      }
+      return { promise: existing.promise, cancel: existing.cancel || (() => {}) };
     }
 
-    const stream = queryWordDetailsEnglishStream(word, { onPartialData, onRawText });
-    const promise = stream.promise.then((data) => {
+    const entry = {
+      listeners: new Set(),
+      state: { rawText: '', partial: createEmptyWordQueryResult(word), hasStructured: false }
+    };
+
+    if (onPartialData || onRawText || onDone || onError) {
+      entry.listeners.add({ onPartialData, onRawText, onDone, onError });
+    }
+
+    const stream = queryWordDetailsEnglishStream(word, {
+      onPartialData: (partial) => {
+        entry.state.partial = partial;
+        entry.state.hasStructured = true;
+        notifyWordQueryListeners(entry, 'partial', partial);
+      },
+      onRawText: (text) => {
+        entry.state.rawText = text;
+        if (!entry.state.hasStructured) notifyWordQueryListeners(entry, 'raw', text);
+      }
+    });
+
+    entry.cancel = () => {
+      try { stream.cancel?.(); } catch {}
+    };
+
+    entry.promise = stream.promise.then((data) => {
       upsertWordQueryCacheItem(key, data);
       scheduleSaveWordQueryCache();
+      notifyWordQueryListeners(entry, 'done', data);
       return data;
+    }).catch((err) => {
+      notifyWordQueryListeners(entry, 'error', err);
+      throw err;
     }).finally(() => {
       wordQueryInFlight.delete(key);
     });
 
-    wordQueryInFlight.set(key, promise);
-    return { promise, cancel: stream.cancel };
+    wordQueryInFlight.set(key, entry);
+    return { promise: entry.promise, cancel: entry.cancel };
   }
 
   function forceRetryWordQuery(word) {
@@ -1452,8 +1489,13 @@ Requirements:
       activeWordQueryStream = null;
     }
 
-    wordQueryCache.delete(key);
+    // cancel & clear any in-flight entry for this key
+    const existing = wordQueryInFlight.get(key);
+    if (existing?.cancel) {
+      try { existing.cancel(); } catch {}
+    }
     wordQueryInFlight.delete(key);
+    wordQueryCache.delete(key);
     scheduleSaveWordQueryCache(100);
 
     if (!tooltip || tooltip.style.display !== 'block') return;
@@ -2591,6 +2633,9 @@ ${uncached.join(', ')}
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询</div>
       <div class="vocabmeld-tooltip-query-status">未启用（设置 → API 配置 → 查询配置）</div>
+      <div class="vocabmeld-tooltip-query-actions">
+        <button type="button" class="vocabmeld-tooltip-query-retry" disabled title="请先在设置中启用查询">重试</button>
+      </div>
     `;
   }
 
@@ -2598,6 +2643,9 @@ ${uncached.join(', ')}
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询</div>
       <div class="vocabmeld-tooltip-query-status">未配置查询 API</div>
+      <div class="vocabmeld-tooltip-query-actions">
+        <button type="button" class="vocabmeld-tooltip-query-retry" disabled title="请先配置查询 API">重试</button>
+      </div>
     `;
   }
 
@@ -2605,6 +2653,9 @@ ${uncached.join(', ')}
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
       <div class="vocabmeld-tooltip-query-status">加载中…</div>
+      <div class="vocabmeld-tooltip-query-actions">
+        <button type="button" class="vocabmeld-tooltip-query-retry">重试</button>
+      </div>
     `;
   }
 
@@ -2613,6 +2664,9 @@ ${uncached.join(', ')}
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
       <div class="vocabmeld-tooltip-query-status">生成中…</div>
+      <div class="vocabmeld-tooltip-query-actions">
+        <button type="button" class="vocabmeld-tooltip-query-retry">重试</button>
+      </div>
       <pre class="vocabmeld-tooltip-query-stream">${escapeHtml(shown)}</pre>
     `;
   }
@@ -2621,6 +2675,9 @@ ${uncached.join(', ')}
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
       <div class="vocabmeld-tooltip-query-status vocabmeld-tooltip-query-error">查询失败：${escapeHtml(message || '')}</div>
+      <div class="vocabmeld-tooltip-query-actions">
+        <button type="button" class="vocabmeld-tooltip-query-retry">重试</button>
+      </div>
     `;
   }
 
@@ -2670,6 +2727,9 @@ ${uncached.join(', ')}
 
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
+      <div class="vocabmeld-tooltip-query-actions">
+        <button type="button" class="vocabmeld-tooltip-query-retry">重试</button>
+      </div>
       ${statusText ? `<div class="vocabmeld-tooltip-query-status">${escapeHtml(statusText)}</div>` : ''}
       ${safeWord ? `<div class="vocabmeld-tooltip-query-word">${safeWord}</div>` : ''}
       ${partsLine}
@@ -2696,6 +2756,7 @@ ${uncached.join(', ')}
     const queryWord = normalizeWordQueryText(translation);
     const queryKey = makeWordQueryCacheKey(queryWord);
     tooltip.dataset.wordQueryKey = queryKey;
+    tooltip.dataset.wordQueryWord = queryWord;
 
     if (activeWordQueryStream?.key && activeWordQueryStream.key !== queryKey) {
       try { activeWordQueryStream.cancel?.(); } catch {}
@@ -2755,6 +2816,13 @@ ${uncached.join(', ')}
     activeTooltipTarget = element;
 
     if (shouldFetchQuery && queryWord) {
+      clearTimeout(wordQueryLoadingTimeoutTimer);
+      wordQueryLoadingTimeoutTimer = setTimeout(() => {
+        if (!tooltip || tooltip.style.display !== 'block') return;
+        if (tooltip.dataset.wordQueryKey !== queryKey) return;
+        showRetryFab({ kind: 'wordQuery', word: queryWord, at: Date.now() });
+      }, 2500);
+
       let hasStructuredUpdate = false;
       const stream = prefetchWordQueryStreaming(queryWord, {
         onPartialData: (partial) => {
@@ -2778,11 +2846,14 @@ ${uncached.join(', ')}
       activeWordQueryStream = { key: queryKey, cancel: stream.cancel };
 
       stream.promise.then((data) => {
+        clearTimeout(wordQueryLoadingTimeoutTimer);
+        hideRetryFab();
         if (!tooltip || tooltip.style.display !== 'block') return;
         if (tooltip.dataset.wordQueryKey !== queryKey) return;
         const finalContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
         if (finalContainer) finalContainer.innerHTML = buildTooltipQueryHtmlData(data);
       }).catch((err) => {
+        clearTimeout(wordQueryLoadingTimeoutTimer);
         if (!tooltip || tooltip.style.display !== 'block') return;
         if (tooltip.dataset.wordQueryKey !== queryKey) return;
         const errorContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
@@ -2798,6 +2869,8 @@ ${uncached.join(', ')}
       if (tooltip) tooltip.style.display = 'none';
       activeTooltipTarget = null;
       if (tooltip) tooltip.dataset.wordQueryKey = '';
+      if (tooltip) tooltip.dataset.wordQueryWord = '';
+      clearTimeout(wordQueryLoadingTimeoutTimer);
       if (activeWordQueryStream?.cancel) {
         try { activeWordQueryStream.cancel(); } catch {}
       }
@@ -2808,6 +2881,8 @@ ${uncached.join(', ')}
         if (tooltip) tooltip.style.display = 'none';
         activeTooltipTarget = null;
         if (tooltip) tooltip.dataset.wordQueryKey = '';
+        if (tooltip) tooltip.dataset.wordQueryWord = '';
+        clearTimeout(wordQueryLoadingTimeoutTimer);
         if (activeWordQueryStream?.cancel) {
           try { activeWordQueryStream.cancel(); } catch {}
         }
@@ -2850,6 +2925,24 @@ ${uncached.join(', ')}
         return;
       }
 
+      // 如果最近是单词查询报错，预取一次刷新缓存（不弹出）
+      if (lastApiErrorContext?.kind === 'wordQuery' && lastApiErrorContext?.word) {
+        const w = lastApiErrorContext.word;
+        // 清理旧 in-flight，避免复用卡住
+        const k = makeWordQueryCacheKey(w);
+        if (k) {
+          const existing = wordQueryInFlight.get(k);
+          if (existing?.cancel) {
+            try { existing.cancel(); } catch {}
+          }
+          wordQueryInFlight.delete(k);
+          wordQueryCache.delete(k);
+        }
+        prefetchWordQueryStreaming(w, {}).promise.catch(() => {});
+        showToast('已开始重试查询');
+        return;
+      }
+
       // 否则尝试让后台重置队列
       chrome.runtime.sendMessage({ action: 'resetApiQueue' }, () => {});
       showToast('已请求重试');
@@ -2865,7 +2958,7 @@ ${uncached.join(', ')}
     clearTimeout(retryFabHideTimer);
     retryFabHideTimer = setTimeout(() => {
       if (retryFab) retryFab.style.display = 'none';
-    }, 12000);
+    }, 60000);
   }
 
   function createSelectionPopup() {
@@ -2905,7 +2998,13 @@ ${uncached.join(', ')}
       clearTimeout(wordQueryHoverTimer);
       lastWordQueryHoverKey = key;
       wordQueryHoverTimer = setTimeout(() => {
-        prefetchWordQuery(word).catch(() => {});
+        // Cancel previous hover stream (if any)
+        if (wordQueryHoverStream?.cancel && wordQueryHoverStream.key !== key) {
+          try { wordQueryHoverStream.cancel(); } catch {}
+        }
+        const s = prefetchWordQueryStreaming(word, {});
+        wordQueryHoverStream = { key, cancel: s.cancel };
+        s.promise.catch(() => {});
       }, WORD_QUERY_HOVER_DELAY_MS);
     }, { passive: true });
 
@@ -2915,10 +3014,28 @@ ${uncached.join(', ')}
       if (e.relatedTarget && target.contains(e.relatedTarget)) return;
       clearTimeout(wordQueryHoverTimer);
       lastWordQueryHoverKey = '';
+
+      // If tooltip is not showing this key, cancel hover stream to avoid "stuck" in-flight
+      if (wordQueryHoverStream?.key) {
+        const tooltipKey = tooltip?.dataset?.wordQueryKey || '';
+        if (!tooltipKey || tooltipKey !== wordQueryHoverStream.key) {
+          try { wordQueryHoverStream.cancel?.(); } catch {}
+          wordQueryHoverStream = null;
+        }
+      }
     }, { passive: true });
 
     // tooltip 按钮点击事件
     document.addEventListener('click', (e) => {
+      const retryBtn = e.target.closest?.('.vocabmeld-tooltip-query-retry');
+      if (retryBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const word = tooltip?.dataset?.wordQueryWord || (activeTooltipTarget?.getAttribute?.('data-translation') || '');
+        forceRetryWordQuery(word);
+        return;
+      }
+
       // 发音按钮
       const speakBtn = e.target.closest('.vocabmeld-btn-speak');
       if (speakBtn) {

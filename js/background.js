@@ -219,6 +219,14 @@ function pruneOldRequests(now) {
   apiRecentRequestStarts = apiRecentRequestStarts.filter(t => t >= cutoff);
 }
 
+function normalizeActiveCountersIfIdle() {
+  if (activeRequestCount !== 0) return;
+  if (activeTranslationRequestCount !== 0 || activeQueryRequestCount !== 0) {
+    activeTranslationRequestCount = 0;
+    activeQueryRequestCount = 0;
+  }
+}
+
 function computeNextDelayMs(now) {
   const rpmLimit = apiRateConfig.apiRpmLimit || 0;
   const minIntervalMs = apiRateConfig.apiRequestIntervalMs || 0;
@@ -254,6 +262,15 @@ async function processApiQueue() {
         if (idx >= 0) return queue.splice(idx, 1)[0];
       }
       return queue.shift();
+    }
+
+    function scheduleNextSafe() {
+      try {
+        scheduleNext();
+      } catch (e) {
+        console.error('[VocabMeld][API] scheduleNext crashed:', e);
+        apiQueueProcessing = false;
+      }
     }
 
     // 并行处理请求的辅助函数
@@ -301,12 +318,13 @@ async function processApiQueue() {
         activeRequestCount--;
         if (isQuery) activeQueryRequestCount--; else activeTranslationRequestCount--;
         // 当一个请求完成时，尝试启动更多请求
-        scheduleNext();
+        scheduleNextSafe();
       }
     }
 
     // 调度下一个请求
-    async function scheduleNext() {
+    function scheduleNext() {
+      normalizeActiveCountersIfIdle();
       const maxConcurrent = apiRateConfig.maxConcurrentRequests || 1;
       const QUERY_RESERVED_SLOTS = 5;
       const wantsQuerySlots = (queryRequestQueue.length > 0 || activeQueryRequestCount > 0);
@@ -320,7 +338,7 @@ async function processApiQueue() {
 
         if (delay > 0) {
           // 需要等待，延迟后再调度
-          setTimeout(() => scheduleNext(), delay);
+          setTimeout(() => scheduleNextSafe(), delay);
           return;
         }
 
@@ -345,13 +363,15 @@ async function processApiQueue() {
 
       // 如果队列为空且没有活跃请求，结束处理
       if (apiRequestQueue.length === 0 && queryRequestQueue.length === 0 && activeRequestCount === 0) {
+        activeTranslationRequestCount = 0;
+        activeQueryRequestCount = 0;
         apiQueueProcessing = false;
       }
     }
 
     // 开始调度
     try {
-      scheduleNext();
+      scheduleNextSafe();
     } catch (e) {
       console.error('[VocabMeld][API] scheduleNext crashed:', e);
       apiQueueProcessing = false;
