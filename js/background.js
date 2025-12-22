@@ -518,7 +518,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // 清空缓存
   if (message.action === 'clearCache') {
-    chrome.storage.local.remove('vocabmeld_word_cache', () => {
+    chrome.storage.local.remove(['vocabmeld_word_cache', 'vocabmeld_word_query_cache'], () => {
       chrome.storage.sync.set({ cacheHits: 0, cacheMisses: 0 }, () => {
         sendResponse({ success: true });
       });

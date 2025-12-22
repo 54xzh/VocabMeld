@@ -15,6 +15,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 当前配置状态
   let apiConfigs = {};
   let currentConfigName = '';
+  let translationApiConfigName = '';
+  let queryApiConfigName = '';
   let currentLogRetentionDays = 7;
 
   const CEFR_LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
@@ -34,6 +36,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // API 配置
     apiConfigSelect: document.getElementById('apiConfigSelect'),
+    translationApiConfigSelect: document.getElementById('translationApiConfigSelect'),
+    queryApiConfigSelect: document.getElementById('queryApiConfigSelect'),
+    enableWordQuery: document.getElementById('enableWordQuery'),
     newConfigBtn: document.getElementById('newConfigBtn'),
     saveConfigBtn: document.getElementById('saveConfigBtn'),
     deleteConfigBtn: document.getElementById('deleteConfigBtn'),
@@ -221,14 +226,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     return prefixMap[langCode] || langCode.split('-')[0];
   }
 
+  function getFirstApiConfigName() {
+    return Object.keys(apiConfigs)[0] || '';
+  }
+
+  function updateQueryControlsEnabled() {
+    if (!elements.enableWordQuery || !elements.queryApiConfigSelect) return;
+    elements.queryApiConfigSelect.disabled = !elements.enableWordQuery.checked;
+  }
+
   // 加载 API 配置列表
   function loadApiConfigs(callback) {
-    chrome.storage.sync.get(['apiConfigs', 'currentApiConfig'], (result) => {
+    chrome.storage.sync.get(['apiConfigs', 'currentApiConfig', 'translationApiConfig', 'queryApiConfig'], (result) => {
       // 如果没有配置，使用默认配置
       apiConfigs = result.apiConfigs || { ...DEFAULT_API_CONFIGS };
       currentConfigName = result.currentApiConfig || Object.keys(apiConfigs)[0] || '';
+      translationApiConfigName = result.translationApiConfig || currentConfigName || getFirstApiConfigName();
+      queryApiConfigName = result.queryApiConfig || translationApiConfigName || getFirstApiConfigName();
 
       updateConfigSelect();
+      updateRoleConfigSelects();
 
       if (callback) callback();
     });
@@ -254,6 +271,35 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (currentConfigName) {
       elements.configName.value = currentConfigName;
     }
+  }
+
+  function updateRoleConfigSelects() {
+    const names = Object.keys(apiConfigs);
+    if (elements.translationApiConfigSelect) {
+      elements.translationApiConfigSelect.innerHTML = '';
+      names.forEach(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        elements.translationApiConfigSelect.appendChild(option);
+      });
+      if (!apiConfigs[translationApiConfigName]) translationApiConfigName = names[0] || '';
+      elements.translationApiConfigSelect.value = translationApiConfigName || (names[0] || '');
+    }
+
+    if (elements.queryApiConfigSelect) {
+      elements.queryApiConfigSelect.innerHTML = '';
+      names.forEach(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        elements.queryApiConfigSelect.appendChild(option);
+      });
+      if (!apiConfigs[queryApiConfigName]) queryApiConfigName = names[0] || '';
+      elements.queryApiConfigSelect.value = queryApiConfigName || (names[0] || '');
+    }
+
+    updateQueryControlsEnabled();
   }
 
   // 应用选中的配置
@@ -302,9 +348,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 检查是否是重命名（当前选中的配置名与输入的不同）
     const selectedConfig = elements.apiConfigSelect.value;
-    if (selectedConfig && selectedConfig !== configName && apiConfigs[selectedConfig]) {
+    const isRenaming = selectedConfig && selectedConfig !== '_new' && selectedConfig !== configName && apiConfigs[selectedConfig];
+    if (isRenaming) {
       // 删除旧名称的配置
       delete apiConfigs[selectedConfig];
+      if (translationApiConfigName === selectedConfig) translationApiConfigName = configName;
+      if (queryApiConfigName === selectedConfig) queryApiConfigName = configName;
     }
 
     // 保存配置
@@ -320,12 +369,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.storage.sync.set({
       apiConfigs: apiConfigs,
       currentApiConfig: currentConfigName,
-      apiEndpoint: endpoint,
-      apiKey: apiKey,
-      modelName: model
+      translationApiConfig: translationApiConfigName || currentConfigName,
+      queryApiConfig: queryApiConfigName || translationApiConfigName || currentConfigName
     }, () => {
       updateConfigSelect();
+      updateRoleConfigSelects();
       showConfigToast(`配置 "${configName}" 已保存`);
+      saveSettings();
     });
   }
 
@@ -344,21 +394,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     delete apiConfigs[configName];
     currentConfigName = Object.keys(apiConfigs)[0];
 
+    if (translationApiConfigName === configName) translationApiConfigName = currentConfigName;
+    if (queryApiConfigName === configName) queryApiConfigName = translationApiConfigName || currentConfigName;
+
     // 保存到存储并应用新配置
     chrome.storage.sync.set({
       apiConfigs: apiConfigs,
-      currentApiConfig: currentConfigName
+      currentApiConfig: currentConfigName,
+      translationApiConfig: translationApiConfigName,
+      queryApiConfig: queryApiConfigName
     }, () => {
       updateConfigSelect();
       applyConfig(currentConfigName);
-      // 同时更新当前使用的 API 配置
-      const config = apiConfigs[currentConfigName];
-      chrome.storage.sync.set({
-        apiEndpoint: config.endpoint,
-        apiKey: config.apiKey,
-        modelName: config.model
-      });
+      updateRoleConfigSelects();
       showConfigToast(`配置 "${configName}" 已删除`);
+      saveSettings();
     });
   }
 
@@ -389,6 +439,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       elements.themeRadios.forEach(radio => {
         radio.checked = radio.value === theme;
       });
+
+      // 查询开关
+      if (elements.enableWordQuery) {
+        elements.enableWordQuery.checked = result.enableWordQuery ?? false;
+        updateQueryControlsEnabled();
+      }
+
+      // API 角色选择（如果存在则优先用存储值）
+      if (elements.translationApiConfigSelect) {
+        translationApiConfigName = result.translationApiConfig || translationApiConfigName || currentConfigName || getFirstApiConfigName();
+        if (apiConfigs[translationApiConfigName]) elements.translationApiConfigSelect.value = translationApiConfigName;
+      }
+      if (elements.queryApiConfigSelect) {
+        queryApiConfigName = result.queryApiConfig || queryApiConfigName || translationApiConfigName || currentConfigName || getFirstApiConfigName();
+        if (apiConfigs[queryApiConfigName]) elements.queryApiConfigSelect.value = queryApiConfigName;
+      }
 
       // API 配置（如果没有配置列表，使用直接存储的值作为后备）
       if (!result.apiConfigs) {
@@ -739,11 +805,27 @@ document.addEventListener('DOMContentLoaded', async () => {
       ? Math.max(0, parsedRetentionDays)
       : currentLogRetentionDays;
 
+    const translationSelected = elements.translationApiConfigSelect?.value || translationApiConfigName || getFirstApiConfigName();
+    const translationConfig = apiConfigs[translationSelected] || apiConfigs[getFirstApiConfigName()] || {};
+
+    const querySelected = elements.queryApiConfigSelect?.value || queryApiConfigName || translationSelected || getFirstApiConfigName();
+    const queryConfig = apiConfigs[querySelected] || translationConfig || {};
+
     const settings = {
       theme: document.querySelector('input[name="theme"]:checked').value,
-      apiEndpoint: elements.apiEndpoint.value.trim(),
-      apiKey: elements.apiKey.value.trim(),
-      modelName: elements.modelName.value.trim(),
+
+      // API：按角色选择配置，并写入当前生效的 endpoint/key/model（供 content script 使用）
+      translationApiConfig: translationSelected,
+      apiEndpoint: (translationConfig.endpoint || '').trim(),
+      apiKey: (translationConfig.apiKey || '').trim(),
+      modelName: (translationConfig.model || '').trim(),
+
+      queryApiConfig: querySelected,
+      queryApiEndpoint: (queryConfig.endpoint || '').trim(),
+      queryApiKey: (queryConfig.apiKey || '').trim(),
+      queryModelName: (queryConfig.model || '').trim(),
+      enableWordQuery: elements.enableWordQuery?.checked ?? false,
+
       nativeLanguage: elements.nativeLanguage.value,
       targetLanguage: elements.targetLanguage.value,
       difficultyLevel: CEFR_LEVELS[elements.difficultyLevel.value],
@@ -791,9 +873,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   function addAutoSaveListeners() {
     // 文本输入框 - 失焦时保存
     const textInputs = [
-      elements.apiEndpoint,
-      elements.apiKey,
-      elements.modelName,
       elements.excludedSitesInput,
       elements.allowedSitesInput
     ];
@@ -1088,13 +1167,31 @@ document.addEventListener('DOMContentLoaded', async () => {
       // 切换配置时保存当前使用的配置
       if (apiConfigs[selectedValue]) {
         chrome.storage.sync.set({
-          currentApiConfig: selectedValue,
-          apiEndpoint: elements.apiEndpoint.value,
-          apiKey: elements.apiKey.value,
-          modelName: elements.modelName.value
+          currentApiConfig: selectedValue
         });
       }
     });
+
+    if (elements.translationApiConfigSelect) {
+      elements.translationApiConfigSelect.addEventListener('change', () => {
+        translationApiConfigName = elements.translationApiConfigSelect.value;
+        debouncedSave(200);
+      });
+    }
+
+    if (elements.queryApiConfigSelect) {
+      elements.queryApiConfigSelect.addEventListener('change', () => {
+        queryApiConfigName = elements.queryApiConfigSelect.value;
+        debouncedSave(200);
+      });
+    }
+
+    if (elements.enableWordQuery) {
+      elements.enableWordQuery.addEventListener('change', () => {
+        updateQueryControlsEnabled();
+        debouncedSave(200);
+      });
+    }
 
     // 新建配置按钮
     elements.newConfigBtn.addEventListener('click', () => {
@@ -1292,6 +1389,12 @@ document.addEventListener('DOMContentLoaded', async () => {
           apiEndpoint: syncData.apiEndpoint,
           apiKey: syncData.apiKey,
           modelName: syncData.modelName,
+          translationApiConfig: syncData.translationApiConfig,
+          queryApiConfig: syncData.queryApiConfig,
+          queryApiEndpoint: syncData.queryApiEndpoint,
+          queryApiKey: syncData.queryApiKey,
+          queryModelName: syncData.queryModelName,
+          enableWordQuery: syncData.enableWordQuery,
           apiConfigs: syncData.apiConfigs,
           currentApiConfig: syncData.currentApiConfig,
           nativeLanguage: syncData.nativeLanguage,
@@ -1332,8 +1435,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       if (elements.exportCache.checked) {
-        const localData = await new Promise(resolve => chrome.storage.local.get('vocabmeld_word_cache', resolve));
-        exportData.cache = localData.vocabmeld_word_cache || [];
+        const localData = await new Promise(resolve => chrome.storage.local.get(['vocabmeld_word_cache', 'vocabmeld_word_query_cache'], resolve));
+        exportData.cache = {
+          wordCache: localData.vocabmeld_word_cache || [],
+          wordQueryCache: localData.vocabmeld_word_query_cache || []
+        };
       }
 
       // 下载文件
@@ -1384,7 +1490,13 @@ document.addEventListener('DOMContentLoaded', async () => {
           Object.assign(syncUpdates, data.stats);
         }
         if (data.cache) {
-          localUpdates.vocabmeld_word_cache = data.cache;
+          if (Array.isArray(data.cache)) {
+            // backward compatible
+            localUpdates.vocabmeld_word_cache = data.cache;
+          } else {
+            localUpdates.vocabmeld_word_cache = data.cache.wordCache || [];
+            localUpdates.vocabmeld_word_query_cache = data.cache.wordQueryCache || [];
+          }
         }
 
         // 保存数据

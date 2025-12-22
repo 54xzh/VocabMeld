@@ -43,6 +43,32 @@
   border-top: 1px solid #e2e8f0 !important;
 }
 
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query {
+  border-top: 1px solid #e2e8f0 !important;
+}
+
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-word {
+  color: #1e293b !important;
+}
+
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-status {
+  color: #64748b !important;
+}
+
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-meta {
+  color: #334155 !important;
+}
+
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-defs li {
+  color: #1e293b !important;
+}
+
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-chip {
+  background: rgba(79, 70, 229, 0.10) !important;
+  border: 1px solid rgba(79, 70, 229, 0.18) !important;
+  color: #1e293b !important;
+}
+
 .vocabmeld-selection-popup[data-theme="light"] {
   background: #ffffff !important;
   border: 1px solid #e2e8f0 !important;
@@ -195,6 +221,90 @@
   font-size: 13px !important;
   margin-bottom: 8px !important;
   padding: 0 !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query {
+  margin-top: 10px !important;
+  padding-top: 10px !important;
+  border-top: 1px solid #334155 !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-title {
+  font-size: 11px !important;
+  color: #94a3b8 !important;
+  margin-bottom: 6px !important;
+  letter-spacing: 0.3px !important;
+  text-transform: uppercase !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-word {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: #e2e8f0 !important;
+  margin-bottom: 6px !important;
+  word-break: break-word !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-status {
+  font-size: 12px !important;
+  color: #94a3b8 !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-error {
+  color: #fca5a5 !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-meta {
+  font-size: 12px !important;
+  color: #cbd5e1 !important;
+  margin-bottom: 6px !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-label {
+  display: inline-block !important;
+  font-size: 11px !important;
+  color: #94a3b8 !important;
+  margin-right: 6px !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-sense {
+  margin: 8px 0 !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-pos {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: #a5b4fc !important;
+  margin-bottom: 4px !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-defs {
+  margin: 0 0 0 16px !important;
+  padding: 0 !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-defs li {
+  margin: 2px 0 !important;
+  color: #e2e8f0 !important;
+  font-size: 12px !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-chips {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  margin-top: 8px !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-chip {
+  display: inline-flex !important;
+  padding: 4px 8px !important;
+  border-radius: 999px !important;
+  background: rgba(99, 102, 241, 0.18) !important;
+  border: 1px solid rgba(99, 102, 241, 0.25) !important;
+  color: #e2e8f0 !important;
+  font-size: 11px !important;
+  line-height: 1.2 !important;
 }
 
 .vocabmeld-tooltip .vocabmeld-tooltip-tip {

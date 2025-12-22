@@ -75,70 +75,98 @@
       <!-- API 配置 -->
       <section id="api" class="settings-section active">
         <h2>API 配置</h2>
-        <p class="section-desc">配置用于翻译的 AI 服务 API</p>
+        <p class="section-desc">管理 API 配置，并分别选择用于翻译与单词查询的配置</p>
 
-        <div class="form-group">
-          <label>配置</label>
-          <div class="config-selector">
-            <select id="apiConfigSelect"></select>
-            <button type="button" class="btn-icon" id="newConfigBtn" title="新建配置">
-              <svg viewBox="0 0 24 24" width="18" height="18">
-                <path fill="currentColor" d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z" />
-              </svg>
-            </button>
-            <button type="button" class="btn-icon btn-icon-danger" id="deleteConfigBtn" title="删除配置">
+        <div class="settings-card">
+          <h3>配置编辑</h3>
+
+          <div class="form-group">
+            <label>配置</label>
+            <div class="config-selector">
+              <select id="apiConfigSelect"></select>
+              <button type="button" class="btn-icon" id="newConfigBtn" title="新建配置">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z" />
+                </svg>
+              </button>
+              <button type="button" class="btn-icon btn-icon-danger" id="deleteConfigBtn" title="删除配置">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor"
+                    d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="configName">配置名称</label>
+            <input type="text" id="configName" placeholder="输入配置名称">
+          </div>
+
+          <div class="form-group">
+            <label for="apiEndpoint">API 端点</label>
+            <input type="url" id="apiEndpoint" placeholder="https://api.example.com/v1/chat/completions">
+          </div>
+
+          <div class="form-group">
+            <label for="apiKey">API 密钥</label>
+            <div class="input-with-toggle">
+              <input type="password" id="apiKey" placeholder="sk-xxxxx">
+              <button type="button" class="toggle-visibility" id="toggleApiKey">
+                <svg viewBox="0 0 24 24" width="20" height="20">
+                  <path fill="currentColor"
+                    d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="modelName">模型名称</label>
+            <input type="text" id="modelName" placeholder="gpt-4o-mini">
+          </div>
+
+          <div class="form-actions">
+            <button class="btn btn-primary" id="saveConfigBtn">
               <svg viewBox="0 0 24 24" width="18" height="18">
                 <path fill="currentColor"
-                  d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" />
+                  d="M15,9H5V5H15M12,19A3,3 0 0,1 9,16A3,3 0 0,1 12,13A3,3 0 0,1 15,16A3,3 0 0,1 12,19M17,3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3Z" />
               </svg>
+              保存配置
             </button>
+            <button class="btn btn-secondary" id="testConnectionBtn">
+              <svg viewBox="0 0 24 24" width="18" height="18">
+                <path fill="currentColor"
+                  d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M11,16.5L18,9.5L16.59,8.09L11,13.67L7.91,10.59L6.5,12L11,16.5Z" />
+              </svg>
+              测试连接
+            </button>
+            <span class="test-result" id="testResult"></span>
           </div>
         </div>
 
-        <div class="form-group">
-          <label for="configName">配置名称</label>
-          <input type="text" id="configName" placeholder="输入配置名称">
-        </div>
-
-        <div class="form-group">
-          <label for="apiEndpoint">API 端点</label>
-          <input type="url" id="apiEndpoint" placeholder="https://api.example.com/v1/chat/completions">
-        </div>
-
-        <div class="form-group">
-          <label for="apiKey">API 密钥</label>
-          <div class="input-with-toggle">
-            <input type="password" id="apiKey" placeholder="sk-xxxxx">
-            <button type="button" class="toggle-visibility" id="toggleApiKey">
-              <svg viewBox="0 0 24 24" width="20" height="20">
-                <path fill="currentColor"
-                  d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z" />
-              </svg>
-            </button>
+        <div class="settings-card">
+          <h3>翻译配置</h3>
+          <div class="form-group">
+            <label for="translationApiConfigSelect">用于翻译的配置</label>
+            <select id="translationApiConfigSelect"></select>
+            <p class="help-text">网页词汇替换、句子/段落翻译将使用此配置。</p>
           </div>
         </div>
 
-        <div class="form-group">
-          <label for="modelName">模型名称</label>
-          <input type="text" id="modelName" placeholder="gpt-4o-mini">
-        </div>
-
-        <div class="form-actions">
-          <button class="btn btn-primary" id="saveConfigBtn">
-            <svg viewBox="0 0 24 24" width="18" height="18">
-              <path fill="currentColor"
-                d="M15,9H5V5H15M12,19A3,3 0 0,1 9,16A3,3 0 0,1 12,13A3,3 0 0,1 15,16A3,3 0 0,1 12,19M17,3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3Z" />
-            </svg>
-            保存配置
-          </button>
-          <button class="btn btn-secondary" id="testConnectionBtn">
-            <svg viewBox="0 0 24 24" width="18" height="18">
-              <path fill="currentColor"
-                d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M11,16.5L18,9.5L16.59,8.09L11,13.67L7.91,10.59L6.5,12L11,16.5Z" />
-            </svg>
-            测试连接
-          </button>
-          <span class="test-result" id="testResult"></span>
+        <div class="settings-card">
+          <h3>查询配置</h3>
+          <div class="form-group">
+            <label class="checkbox-item">
+              <input type="checkbox" id="enableWordQuery">
+              <span>启用：悬停 200ms 预取单词更多释义/变形（点击单词时显示）</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label for="queryApiConfigSelect">用于单词查询的配置</label>
+            <select id="queryApiConfigSelect"></select>
+            <p class="help-text">查询将输出英文释义（无例句），并缓存以跨页面复用。</p>
+          </div>
         </div>
       </section>
 

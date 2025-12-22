@@ -27,6 +27,9 @@
     'syntax'
   ];
   const DEFAULT_CACHE_MAX_SIZE = 2000;
+  const DEFAULT_WORD_QUERY_CACHE_MAX_SIZE = 500;
+  const WORD_QUERY_CACHE_STORAGE_KEY = 'vocabmeld_word_query_cache';
+  const WORD_QUERY_HOVER_DELAY_MS = 200;
   const DEFAULT_SENTENCE_TRANSLATION_RATE = 0; // 0-100
   const DEFAULT_PARAGRAPH_TRANSLATION_RATE = 0; // 0-100
   const MAX_SENTENCE_TRANSLATIONS_PER_PARAGRAPH = 3;
@@ -57,6 +60,11 @@
   let isProcessing = false;
   let processedFingerprints = new Set();
   let wordCache = new Map();
+  let wordQueryCache = new Map(); // key -> { data, savedAt }
+  let wordQueryInFlight = new Map(); // key -> Promise
+  let wordQueryCacheSaveTimer = null;
+  let wordQueryHoverTimer = null;
+  let lastWordQueryHoverKey = '';
   let cachedCjkWordsByLangPair = new Map(); // `${sourceLang}:${targetLang}` -> Set(lowerCjkWord)
   let tooltip = null;
   let selectionPopup = null;
@@ -241,6 +249,81 @@
     }
   }
 
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function normalizeWordQueryText(word) {
+    const cleaned = String(word ?? '').replace(/\s+/g, ' ').trim();
+    if (!cleaned) return '';
+    return cleaned.slice(0, 80);
+  }
+
+  function makeWordQueryCacheKey(word) {
+    return normalizeWordQueryText(word).toLowerCase();
+  }
+
+  function evictWordQueryCacheToMaxSize(maxSize) {
+    const limit = Math.max(1, Number(maxSize) || DEFAULT_WORD_QUERY_CACHE_MAX_SIZE);
+    while (wordQueryCache.size >= limit) {
+      const firstKey = wordQueryCache.keys().next().value;
+      if (!firstKey) break;
+      wordQueryCache.delete(firstKey);
+    }
+  }
+
+  function upsertWordQueryCacheItem(key, data) {
+    if (!key || !data) return;
+    if (wordQueryCache.has(key)) wordQueryCache.delete(key); // LRU: reinsert
+    evictWordQueryCacheToMaxSize(DEFAULT_WORD_QUERY_CACHE_MAX_SIZE);
+    wordQueryCache.set(key, { data, savedAt: Date.now() });
+  }
+
+  async function loadWordQueryCache() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(WORD_QUERY_CACHE_STORAGE_KEY, (result) => {
+        wordQueryCache.clear();
+        const cached = result?.[WORD_QUERY_CACHE_STORAGE_KEY];
+        if (cached && Array.isArray(cached)) {
+          cached.forEach(item => {
+            if (!item?.key || !item?.data) return;
+            wordQueryCache.set(String(item.key), { data: item.data, savedAt: item.savedAt || 0 });
+          });
+        }
+        resolve(wordQueryCache);
+      });
+    });
+  }
+
+  async function saveWordQueryCache() {
+    const data = [];
+    for (const [key, value] of wordQueryCache) {
+      data.push({ key, data: value.data, savedAt: value.savedAt || 0 });
+    }
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [WORD_QUERY_CACHE_STORAGE_KEY]: data }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('[VocabMeld] Failed to save word query cache:', chrome.runtime.lastError);
+          reject(chrome.runtime.lastError);
+        } else {
+          resolve();
+        }
+      });
+    });
+  }
+
+  function scheduleSaveWordQueryCache(delay = 600) {
+    clearTimeout(wordQueryCacheSaveTimer);
+    wordQueryCacheSaveTimer = setTimeout(() => {
+      saveWordQueryCache().catch(() => {});
+    }, delay);
+  }
+
   // ============ 存储操作 ============
   async function loadConfig() {
     return new Promise((resolve) => {
@@ -249,6 +332,12 @@
           apiEndpoint: result.apiEndpoint || 'https://api.deepseek.com/chat/completions',
           apiKey: result.apiKey || '',
           modelName: result.modelName || 'deepseek-chat',
+          translationApiConfig: result.translationApiConfig || result.currentApiConfig || '',
+          queryApiEndpoint: result.queryApiEndpoint || result.apiEndpoint || 'https://api.deepseek.com/chat/completions',
+          queryApiKey: result.queryApiKey || result.apiKey || '',
+          queryModelName: result.queryModelName || result.modelName || 'deepseek-chat',
+          queryApiConfig: result.queryApiConfig || result.translationApiConfig || result.currentApiConfig || '',
+          enableWordQuery: result.enableWordQuery ?? false,
           nativeLanguage: result.nativeLanguage || 'zh-CN',
           targetLanguage: result.targetLanguage || 'en',
           difficultyLevel: result.difficultyLevel || 'B1',
@@ -944,8 +1033,136 @@
     });
   }
 
+  function callApiViaBackgroundWith(endpoint, apiKey, body) {
+    if (document.hidden || !isTabActive) {
+      return Promise.reject(new Error('Paused: tab is not active'));
+    }
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({
+        action: 'apiRequest',
+        endpoint,
+        apiKey,
+        body
+      }, response => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else if (!response?.success) {
+          reject(new Error(response?.error || 'API request failed'));
+        } else {
+          resolve(response.data);
+        }
+      });
+    });
+  }
+
   function extractAssistantText(apiResponse) {
     return (apiResponse?.choices?.[0]?.message?.content || '').trim();
+  }
+
+  function tryParseJsonObject(text) {
+    const content = String(text || '').trim();
+    if (!content) return null;
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch {}
+    const match = content.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      const parsed = JSON.parse(match[0]);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch {}
+    return null;
+  }
+
+  function normalizeWordQueryResult(obj, fallbackWord) {
+    const word = normalizeWordQueryText(obj?.word || fallbackWord);
+    const partsOfSpeech = Array.isArray(obj?.parts_of_speech) ? obj.parts_of_speech.filter(Boolean).map(String) : [];
+    const meanings = Array.isArray(obj?.meanings) ? obj.meanings : [];
+    const normalizedMeanings = meanings
+      .map(m => ({
+        pos: String(m?.pos || '').trim(),
+        definitions: Array.isArray(m?.definitions) ? m.definitions.filter(Boolean).map(String).slice(0, 8) : []
+      }))
+      .filter(m => m.pos || m.definitions.length > 0)
+      .slice(0, 8);
+    const inflections = Array.isArray(obj?.inflections) ? obj.inflections.filter(Boolean).map(String).slice(0, 16) : [];
+    const collocations = Array.isArray(obj?.collocations) ? obj.collocations.filter(Boolean).map(String).slice(0, 20) : [];
+    return { word, parts_of_speech: partsOfSpeech, meanings: normalizedMeanings, inflections, collocations };
+  }
+
+  async function queryWordDetailsEnglish(word) {
+    const cleaned = normalizeWordQueryText(word);
+    if (!cleaned) throw new Error('Empty word');
+    if (!config?.queryApiEndpoint || !config?.queryModelName) {
+      throw new Error('Query API is not configured');
+    }
+
+    const prompt = `You are an English dictionary assistant.
+
+Given the word/phrase: ${JSON.stringify(cleaned)}
+
+Return ONLY valid JSON (no Markdown, no code fences) with this schema:
+{
+  "word": string,
+  "parts_of_speech": string[],
+  "meanings": [{"pos": string, "definitions": string[]}],
+  "inflections": string[],
+  "collocations": string[]
+}
+
+Requirements:
+- Definitions must be in English, concise.
+- Include common inflections/variants when applicable (e.g., plural, past, past participle, -ing, 3rd person singular, comparative/superlative).
+- Include common collocations/phrases (5-12 items).
+- Do NOT include example sentences.`;
+
+    const apiResponse = await callApiViaBackgroundWith(config.queryApiEndpoint, config.queryApiKey, {
+      model: config.queryModelName,
+      messages: [
+        { role: 'system', content: 'Return only valid JSON.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.1,
+      max_tokens: 900
+    });
+
+    const content = extractAssistantText(apiResponse);
+    const parsed = tryParseJsonObject(content);
+    if (!parsed) {
+      throw new Error('Invalid JSON response');
+    }
+
+    return normalizeWordQueryResult(parsed, cleaned);
+  }
+
+  function prefetchWordQuery(word) {
+    if (!config?.enableWordQuery) return Promise.resolve(null);
+    const key = makeWordQueryCacheKey(word);
+    if (!key) return Promise.resolve(null);
+
+    const cached = wordQueryCache.get(key);
+    if (cached?.data) {
+      // LRU refresh
+      wordQueryCache.delete(key);
+      wordQueryCache.set(key, cached);
+      return Promise.resolve(cached.data);
+    }
+
+    if (wordQueryInFlight.has(key)) return wordQueryInFlight.get(key);
+
+    const promise = queryWordDetailsEnglish(word)
+      .then((data) => {
+        upsertWordQueryCacheItem(key, data);
+        scheduleSaveWordQueryCache();
+        return data;
+      })
+      .finally(() => {
+        wordQueryInFlight.delete(key);
+      });
+
+    wordQueryInFlight.set(key, promise);
+    return promise;
   }
 
   async function translateParagraphToTarget(text, sourceLang, targetLang) {
@@ -2037,6 +2254,79 @@ ${uncached.join(', ')}
     document.body.appendChild(tooltip);
   }
 
+  function buildTooltipQueryHtmlDisabled() {
+    return `
+      <div class="vocabmeld-tooltip-query-title">AI 查询</div>
+      <div class="vocabmeld-tooltip-query-status">未启用（设置 → API 配置 → 查询配置）</div>
+    `;
+  }
+
+  function buildTooltipQueryHtmlNotConfigured() {
+    return `
+      <div class="vocabmeld-tooltip-query-title">AI 查询</div>
+      <div class="vocabmeld-tooltip-query-status">未配置查询 API</div>
+    `;
+  }
+
+  function buildTooltipQueryHtmlLoading() {
+    return `
+      <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
+      <div class="vocabmeld-tooltip-query-status">加载中…</div>
+    `;
+  }
+
+  function buildTooltipQueryHtmlError(message) {
+    return `
+      <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
+      <div class="vocabmeld-tooltip-query-status vocabmeld-tooltip-query-error">查询失败：${escapeHtml(message || '')}</div>
+    `;
+  }
+
+  function buildTooltipQueryHtmlData(data) {
+    const safeWord = escapeHtml(data?.word || '');
+    const parts = Array.isArray(data?.parts_of_speech) ? data.parts_of_speech : [];
+    const meanings = Array.isArray(data?.meanings) ? data.meanings : [];
+    const inflections = Array.isArray(data?.inflections) ? data.inflections : [];
+    const collocations = Array.isArray(data?.collocations) ? data.collocations : [];
+
+    const partsLine = parts.length
+      ? `<div class="vocabmeld-tooltip-query-meta"><span class="vocabmeld-tooltip-query-label">POS</span> ${escapeHtml(parts.join(', '))}</div>`
+      : '';
+
+    const meaningsHtml = meanings.length
+      ? meanings.map(m => {
+          const pos = escapeHtml(m?.pos || '');
+          const defs = Array.isArray(m?.definitions) ? m.definitions : [];
+          const defsHtml = defs.length
+            ? `<ol class="vocabmeld-tooltip-query-defs">${defs.map(d => `<li>${escapeHtml(d)}</li>`).join('')}</ol>`
+            : '';
+          return `
+            <div class="vocabmeld-tooltip-query-sense">
+              ${pos ? `<div class="vocabmeld-tooltip-query-pos">${pos}</div>` : ''}
+              ${defsHtml}
+            </div>
+          `;
+        }).join('')
+      : `<div class="vocabmeld-tooltip-query-status">暂无结果</div>`;
+
+    const inflectionsHtml = inflections.length
+      ? `<div class="vocabmeld-tooltip-query-meta"><span class="vocabmeld-tooltip-query-label">Inflections</span> ${escapeHtml(inflections.join(' · '))}</div>`
+      : '';
+
+    const collocationsHtml = collocations.length
+      ? `<div class="vocabmeld-tooltip-query-chips">${collocations.map(c => `<span class="vocabmeld-tooltip-query-chip">${escapeHtml(c)}</span>`).join('')}</div>`
+      : '';
+
+    return `
+      <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
+      ${safeWord ? `<div class="vocabmeld-tooltip-query-word">${safeWord}</div>` : ''}
+      ${partsLine}
+      ${meaningsHtml}
+      ${inflectionsHtml}
+      ${collocationsHtml}
+    `;
+  }
+
   function showTooltip(element) {
     if (!tooltip || !element.classList?.contains('vocabmeld-translated')) return;
 
@@ -2046,24 +2336,46 @@ ${uncached.join(', ')}
     const difficulty = element.getAttribute('data-difficulty');
     
     // 检查是否已在记忆列表中
+    const originalLower = String(original || '').toLowerCase();
     const isInMemorizeList = (config.memorizeList || []).some(w => 
-      w.word.toLowerCase() === original.toLowerCase()
+      String(w.word || '').toLowerCase() === originalLower
     );
+
+    const queryWord = normalizeWordQueryText(translation);
+    const queryKey = makeWordQueryCacheKey(queryWord);
+    tooltip.dataset.wordQueryKey = queryKey;
+
+    let queryInnerHtml = '';
+    let shouldFetchQuery = false;
+
+    if (!config?.enableWordQuery) {
+      queryInnerHtml = buildTooltipQueryHtmlDisabled();
+    } else if (!config?.queryApiEndpoint || !config?.queryModelName) {
+      queryInnerHtml = buildTooltipQueryHtmlNotConfigured();
+    } else if (queryKey && wordQueryCache.get(queryKey)?.data) {
+      queryInnerHtml = buildTooltipQueryHtmlData(wordQueryCache.get(queryKey).data);
+    } else if (queryKey) {
+      queryInnerHtml = buildTooltipQueryHtmlLoading();
+      shouldFetchQuery = true;
+    } else {
+      queryInnerHtml = buildTooltipQueryHtmlError('无效单词');
+    }
 
     tooltip.innerHTML = `
       <div class="vocabmeld-tooltip-header">
-        <span class="vocabmeld-tooltip-word">${translation}</span>
-        <span class="vocabmeld-tooltip-badge">${difficulty}</span>
+        <span class="vocabmeld-tooltip-word">${escapeHtml(translation)}</span>
+        <span class="vocabmeld-tooltip-badge">${escapeHtml(difficulty)}</span>
       </div>
-      ${phonetic && config.showPhonetic ? `<div class="vocabmeld-tooltip-phonetic">${phonetic}</div>` : ''}
-      <div class="vocabmeld-tooltip-original">原文: ${original}</div>
+      ${phonetic && config.showPhonetic ? `<div class="vocabmeld-tooltip-phonetic">${escapeHtml(phonetic)}</div>` : ''}
+      <div class="vocabmeld-tooltip-original">原文: ${escapeHtml(original)}</div>
+      <div class="vocabmeld-tooltip-query">${queryInnerHtml}</div>
       <div class="vocabmeld-tooltip-actions">
-        <button class="vocabmeld-tooltip-btn vocabmeld-btn-speak" data-original="${original}" data-translation="${translation}" title="发音">
+        <button class="vocabmeld-tooltip-btn vocabmeld-btn-speak" data-original="${escapeHtml(original)}" data-translation="${escapeHtml(translation)}" title="发音">
           <svg viewBox="0 0 24 24" width="16" height="16">
             <path fill="currentColor" d="M14,3.23V5.29C16.89,6.15 19,8.83 19,12C19,15.17 16.89,17.84 14,18.7V20.77C18,19.86 21,16.28 21,12C21,7.72 18,4.14 14,3.23M16.5,12C16.5,10.23 15.5,8.71 14,7.97V16C15.5,15.29 16.5,13.76 16.5,12M3,9V15H7L12,20V4L7,9H3Z"/>
           </svg>
         </button>
-        <button class="vocabmeld-tooltip-btn vocabmeld-btn-memorize ${isInMemorizeList ? 'active' : ''}" data-original="${original}" title="${isInMemorizeList ? '已在记忆列表' : '添加到记忆列表'}">
+        <button class="vocabmeld-tooltip-btn vocabmeld-btn-memorize ${isInMemorizeList ? 'active' : ''}" data-original="${escapeHtml(original)}" title="${isInMemorizeList ? '已在记忆列表' : '添加到记忆列表'}">
           <svg viewBox="0 0 24 24" width="16" height="16">
             ${isInMemorizeList 
               ? '<path fill="currentColor" d="M12,21.35L10.55,20.03C5.4,15.36 2,12.27 2,8.5C2,5.41 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.08C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.41 22,8.5C22,12.27 18.6,15.36 13.45,20.03L12,21.35Z"/>'
@@ -2071,7 +2383,7 @@ ${uncached.join(', ')}
             }
           </svg>
         </button>
-        <button class="vocabmeld-tooltip-btn vocabmeld-btn-learned" data-original="${original}" data-translation="${translation}" data-difficulty="${difficulty}" title="标记已学会">
+        <button class="vocabmeld-tooltip-btn vocabmeld-btn-learned" data-original="${escapeHtml(original)}" data-translation="${escapeHtml(translation)}" data-difficulty="${escapeHtml(difficulty)}" title="标记已学会">
           <svg viewBox="0 0 24 24" width="16" height="16">
             <path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"/>
           </svg>
@@ -2084,6 +2396,20 @@ ${uncached.join(', ')}
     tooltip.style.top = rect.bottom + window.scrollY + 5 + 'px';
     tooltip.style.display = 'block';
     activeTooltipTarget = element;
+
+    if (shouldFetchQuery && queryWord) {
+      prefetchWordQuery(queryWord).then((data) => {
+        if (!tooltip || tooltip.style.display !== 'block') return;
+        if (tooltip.dataset.wordQueryKey !== queryKey) return;
+        const container = tooltip.querySelector('.vocabmeld-tooltip-query');
+        if (container) container.innerHTML = buildTooltipQueryHtmlData(data);
+      }).catch((err) => {
+        if (!tooltip || tooltip.style.display !== 'block') return;
+        if (tooltip.dataset.wordQueryKey !== queryKey) return;
+        const container = tooltip.querySelector('.vocabmeld-tooltip-query');
+        if (container) container.innerHTML = buildTooltipQueryHtmlError(err?.message || String(err));
+      });
+    }
   }
 
   function hideTooltip(immediate = false) {
@@ -2091,11 +2417,13 @@ ${uncached.join(', ')}
       clearTimeout(tooltipHideTimeout);
       if (tooltip) tooltip.style.display = 'none';
       activeTooltipTarget = null;
+      if (tooltip) tooltip.dataset.wordQueryKey = '';
     } else {
       // 延迟隐藏，给用户时间移动到 tooltip 上
       tooltipHideTimeout = setTimeout(() => {
         if (tooltip) tooltip.style.display = 'none';
         activeTooltipTarget = null;
+        if (tooltip) tooltip.dataset.wordQueryKey = '';
       }, 150);
     }
   }
@@ -2139,6 +2467,32 @@ ${uncached.join(', ')}
 
   // ============ 事件处理 ============
   function setupEventListeners() {
+    // 悬停预取：鼠标移动到翻译词汇上，延迟触发 AI 查询（不弹出）
+    document.addEventListener('mouseover', (e) => {
+      const target = e.target.closest?.('.vocabmeld-translated');
+      if (!target) return;
+      if (e.relatedTarget && target.contains(e.relatedTarget)) return;
+      if (!config?.enableWordQuery) return;
+
+      const word = target.getAttribute('data-translation') || '';
+      const key = makeWordQueryCacheKey(word);
+      if (!key) return;
+
+      clearTimeout(wordQueryHoverTimer);
+      lastWordQueryHoverKey = key;
+      wordQueryHoverTimer = setTimeout(() => {
+        prefetchWordQuery(word).catch(() => {});
+      }, WORD_QUERY_HOVER_DELAY_MS);
+    }, { passive: true });
+
+    document.addEventListener('mouseout', (e) => {
+      const target = e.target.closest?.('.vocabmeld-translated');
+      if (!target) return;
+      if (e.relatedTarget && target.contains(e.relatedTarget)) return;
+      clearTimeout(wordQueryHoverTimer);
+      lastWordQueryHoverKey = '';
+    }, { passive: true });
+
     // tooltip 按钮点击事件
     document.addEventListener('click', (e) => {
       // 发音按钮
@@ -2375,6 +2729,7 @@ ${uncached.join(', ')}
   async function init() {
     await loadConfig();
     await loadWordCache();
+    await loadWordQueryCache();
 
     document.addEventListener('visibilitychange', () => {
       isTabActive = !document.hidden;

@@ -176,6 +176,27 @@ body {
   margin-bottom: 32px;
 }
 
+/* Settings Card (subsections) */
+.settings-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  margin-bottom: 18px;
+}
+
+.settings-card h3 {
+  font-size: 16px;
+  font-weight: 650;
+  margin-bottom: 14px;
+  color: var(--text-secondary);
+  letter-spacing: 0.2px;
+}
+
+.settings-card .form-group:last-child {
+  margin-bottom: 0;
+}
+
 /* Form Groups */
 .form-group {
   margin-bottom: 24px;
