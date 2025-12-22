@@ -106,11 +106,22 @@ const lastNavUrlByTabId = new Map(); // tabId -> normalized url (origin+path+sea
 let activeTabId = null;
 let focusedWindowId = null;
 
+// Stream request tracking (Port -> Set(requestId))
+const streamRequestIdsByPort = new WeakMap();
+
 function safeSendResponse(sendResponse, payload) {
   try {
     sendResponse(payload);
   } catch {
     // ignore (caller tab/frame may be gone)
+  }
+}
+
+function safePortPostMessage(port, payload) {
+  try {
+    port.postMessage(payload);
+  } catch {
+    // ignore (port may be disconnected)
   }
 }
 
@@ -253,14 +264,27 @@ async function processApiQueue() {
         const modelLabel = item.body?.model ? `model=${item.body.model}` : '';
         console.info('[VocabMeld][API] Request start:', endpointLabel, modelLabel, `concurrent=${activeRequestCount}`);
 
-        const data = await callApi(item.endpoint, item.apiKey, item.body, { signal: controller.signal });
-        console.info('[VocabMeld][API] Request success:', endpointLabel, modelLabel, `ms=${Date.now() - startedAt}`);
-        safeSendResponse(item.sendResponse, { success: true, data });
+        if (item.streamPort && item.streamId) {
+          const fullText = await callApiStream(item.endpoint, item.apiKey, item.body, {
+            signal: controller.signal,
+            onDelta: (delta) => safePortPostMessage(item.streamPort, { type: 'apiStreamDelta', streamId: item.streamId, delta })
+          });
+          console.info('[VocabMeld][API] Stream success:', endpointLabel, modelLabel, `ms=${Date.now() - startedAt}`);
+          safePortPostMessage(item.streamPort, { type: 'apiStreamDone', streamId: item.streamId, text: fullText });
+        } else {
+          const data = await callApi(item.endpoint, item.apiKey, item.body, { signal: controller.signal });
+          console.info('[VocabMeld][API] Request success:', endpointLabel, modelLabel, `ms=${Date.now() - startedAt}`);
+          safeSendResponse(item.sendResponse, { success: true, data });
+        }
       } catch (error) {
         const endpointLabel = safeEndpointLabel(item.endpoint);
         const modelLabel = item.body?.model ? `model=${item.body.model}` : '';
         console.error('[VocabMeld][API] Request failed:', endpointLabel, modelLabel, `ms=${Date.now() - startedAt}`, error);
-        safeSendResponse(item.sendResponse, { success: false, error: error?.message || String(error) });
+        if (item.streamPort && item.streamId) {
+          safePortPostMessage(item.streamPort, { type: 'apiStreamError', streamId: item.streamId, error: error?.message || String(error) });
+        } else {
+          safeSendResponse(item.sendResponse, { success: false, error: error?.message || String(error) });
+        }
       } finally {
         untrackActiveApiRequest(requestId);
         activeRequestCount--;
@@ -302,6 +326,14 @@ async function processApiQueue() {
   } catch (error) {
     console.error('[VocabMeld][API] Queue processing error:', error);
     apiQueueProcessing = false;
+  }
+}
+
+function removeQueuedRequestsByIds(ids) {
+  if (!ids || ids.size === 0) return;
+  for (let i = apiRequestQueue.length - 1; i >= 0; i--) {
+    const item = apiRequestQueue[i];
+    if (ids.has(item?.requestId)) apiRequestQueue.splice(i, 1);
   }
 }
 
@@ -543,6 +575,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// 流式 API 请求（Port 形式，支持逐步输出）
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'vocabmeld-api-stream') return;
+
+  port.onMessage.addListener((message) => {
+    if (!message || message.action !== 'apiRequestStream') return;
+
+    const body = message.body || {};
+    const selectedModel = selectRoundRobinModel(body.model, message.endpoint);
+    const updatedBody = { ...body, model: selectedModel, stream: true };
+    const tabId = port?.sender?.tab?.id;
+
+    const requestId = apiRequestIdSeq++;
+    apiRequestQueue.push({
+      requestId,
+      endpoint: message.endpoint,
+      apiKey: message.apiKey,
+      body: updatedBody,
+      tabId,
+      streamPort: port,
+      streamId: message.streamId
+    });
+
+    const set = streamRequestIdsByPort.get(port) || new Set();
+    set.add(requestId);
+    streamRequestIdsByPort.set(port, set);
+
+    processApiQueue().catch(err => {
+      safePortPostMessage(port, { type: 'apiStreamError', streamId: message.streamId, error: err?.message || String(err) });
+    });
+  });
+
+  port.onDisconnect.addListener(() => {
+    const ids = streamRequestIdsByPort.get(port);
+    if (!ids || ids.size === 0) return;
+    removeQueuedRequestsByIds(ids);
+    for (const requestId of ids) {
+      const active = activeApiRequestsById.get(requestId);
+      if (active?.controller) {
+        try { active.controller.abort(); } catch {}
+      }
+    }
+  });
+});
+
 // 通用 API 调用（从 background 发起，避免 CORS）
 async function callApi(endpoint, apiKey, body, options = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -647,6 +724,112 @@ async function callApi(endpoint, apiKey, body, options = {}) {
   }
 
   throw new Error('API request failed after retries');
+}
+
+function extractStreamDelta(json) {
+  const choice = json?.choices?.[0];
+  const delta = choice?.delta;
+  if (!delta) return '';
+  if (typeof delta === 'string') return delta;
+  return String(delta.content ?? delta.text ?? '');
+}
+
+async function callApiStream(endpoint, apiKey, body, options = {}) {
+  const headers = { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' };
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+  // 针对 doubao-seed 模型添加 thinking 参数
+  let requestBody = body;
+  if (body?.model && body.model.includes('doubao-seed')) {
+    requestBody = { ...body, thinking: { type: 'disabled' } };
+  }
+
+  const TIMEOUT_MS = 60_000;
+  const externalSignal = options?.signal;
+  const onDelta = typeof options?.onDelta === 'function' ? options.onDelta : null;
+
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (externalSignal) {
+    externalSignal.addEventListener('abort', onAbort, { once: true });
+  }
+  const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(requestBody),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const contentType = (response.headers.get('content-type') || '').toLowerCase();
+      let message = `API Error: ${response.status}`;
+      if (contentType.includes('application/json')) {
+        const error = await response.json().catch(() => ({}));
+        message = error.error?.message || error.message || message;
+      } else {
+        const text = await response.text().catch(() => '');
+        if (text) message = text.slice(0, 500);
+      }
+      throw new Error(message);
+    }
+
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    if (!contentType.includes('text/event-stream') || !response.body) {
+      const json = await response.json().catch(() => ({}));
+      return String(json?.choices?.[0]?.message?.content || '').trim();
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let fullText = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE frames split by blank line
+      const parts = buffer.split(/\n\n/);
+      buffer = parts.pop() || '';
+
+      for (const part of parts) {
+        const lines = part.split(/\n/);
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
+          if (!data) continue;
+          if (data === '[DONE]') return fullText;
+          let json = null;
+          try { json = JSON.parse(data); } catch { json = null; }
+          if (!json) continue;
+          const delta = extractStreamDelta(json);
+          if (!delta) continue;
+          fullText += delta;
+          if (onDelta) onDelta(delta);
+        }
+      }
+    }
+
+    return fullText;
+  } catch (error) {
+    if (externalSignal?.aborted) {
+      throw new Error('API request aborted');
+    }
+    if (error?.name === 'AbortError') {
+      throw new Error(`API request timeout after ${TIMEOUT_MS}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    if (externalSignal) {
+      externalSignal.removeEventListener('abort', onAbort);
+    }
+  }
 }
 
 // 测试 API 连接

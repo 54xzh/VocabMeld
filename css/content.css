@@ -55,11 +55,21 @@
   color: #64748b !important;
 }
 
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-stream {
+  background: rgba(241, 245, 249, 0.9) !important;
+  border: 1px solid rgba(148, 163, 184, 0.28) !important;
+  color: #0f172a !important;
+}
+
 .vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-meta {
   color: #334155 !important;
 }
 
-.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-defs li {
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-def-idx {
+  color: #94a3b8 !important;
+}
+
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-query-def-text {
   color: #1e293b !important;
 }
 
@@ -250,6 +260,22 @@
   color: #94a3b8 !important;
 }
 
+.vocabmeld-tooltip .vocabmeld-tooltip-query-stream {
+  margin-top: 8px !important;
+  padding: 10px 10px !important;
+  border-radius: 8px !important;
+  background: rgba(15, 23, 42, 0.55) !important;
+  border: 1px solid rgba(148, 163, 184, 0.18) !important;
+  color: #e2e8f0 !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  max-height: 180px !important;
+  overflow: auto !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+}
+
 .vocabmeld-tooltip .vocabmeld-tooltip-query-error {
   color: #fca5a5 !important;
 }
@@ -279,14 +305,30 @@
 }
 
 .vocabmeld-tooltip .vocabmeld-tooltip-query-defs {
-  margin: 0 0 0 16px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+  margin: 0 !important;
   padding: 0 !important;
 }
 
-.vocabmeld-tooltip .vocabmeld-tooltip-query-defs li {
-  margin: 2px 0 !important;
+.vocabmeld-tooltip .vocabmeld-tooltip-query-def-item {
+  display: flex !important;
+  gap: 6px !important;
+  align-items: flex-start !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-def-idx {
+  color: #94a3b8 !important;
+  font-size: 12px !important;
+  flex: 0 0 auto !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-query-def-text {
   color: #e2e8f0 !important;
   font-size: 12px !important;
+  line-height: 1.45 !important;
+  flex: 1 1 auto !important;
 }
 
 .vocabmeld-tooltip .vocabmeld-tooltip-query-chips {

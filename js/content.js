@@ -65,6 +65,7 @@
   let wordQueryCacheSaveTimer = null;
   let wordQueryHoverTimer = null;
   let lastWordQueryHoverKey = '';
+  let activeWordQueryStream = null; // { key, cancel }
   let cachedCjkWordsByLangPair = new Map(); // `${sourceLang}:${targetLang}` -> Set(lowerCjkWord)
   let tooltip = null;
   let selectionPopup = null;
@@ -1059,6 +1060,75 @@
     return (apiResponse?.choices?.[0]?.message?.content || '').trim();
   }
 
+  function createStreamId() {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  function apiRequestStreamViaBackground(endpoint, apiKey, body, { onDelta, onText } = {}) {
+    const streamId = createStreamId();
+    const port = chrome.runtime.connect({ name: 'vocabmeld-api-stream' });
+    let fullText = '';
+    let settled = false;
+    let canceled = false;
+    let lastUiAt = 0;
+
+    const promise = new Promise((resolve, reject) => {
+      const handleDisconnect = () => {
+        if (settled) return;
+        settled = true;
+        if (canceled) return reject(new Error('Canceled'));
+        reject(new Error('Stream disconnected'));
+      };
+
+      port.onDisconnect.addListener(handleDisconnect);
+
+      port.onMessage.addListener((msg) => {
+        if (!msg || msg.streamId !== streamId) return;
+        if (msg.type === 'apiStreamDelta') {
+          const delta = String(msg.delta || '');
+          if (!delta) return;
+          fullText += delta;
+          if (typeof onDelta === 'function') {
+            try { onDelta(delta, fullText); } catch {}
+          }
+          if (typeof onText === 'function') {
+            const now = Date.now();
+            if (now - lastUiAt >= 80) {
+              lastUiAt = now;
+              onText(fullText);
+            }
+          }
+          return;
+        }
+        if (msg.type === 'apiStreamDone') {
+          if (settled) return;
+          settled = true;
+          const text = typeof msg.text === 'string' ? msg.text : fullText;
+          if (typeof onText === 'function') onText(text);
+          resolve(text);
+          try { port.disconnect(); } catch {}
+          return;
+        }
+        if (msg.type === 'apiStreamError') {
+          if (settled) return;
+          settled = true;
+          reject(new Error(msg.error || 'Stream error'));
+          try { port.disconnect(); } catch {}
+        }
+      });
+
+      port.postMessage({ action: 'apiRequestStream', streamId, endpoint, apiKey, body });
+    });
+
+    const cancel = () => {
+      if (settled) return;
+      canceled = true;
+      try { port.disconnect(); } catch {}
+    };
+
+    return { promise, cancel };
+  }
+
   function tryParseJsonObject(text) {
     const content = String(text || '').trim();
     if (!content) return null;
@@ -1136,6 +1206,179 @@ Requirements:
     return normalizeWordQueryResult(parsed, cleaned);
   }
 
+  function createEmptyWordQueryResult(word) {
+    return {
+      word: normalizeWordQueryText(word),
+      parts_of_speech: [],
+      meanings: [],
+      inflections: [],
+      collocations: []
+    };
+  }
+
+  function pushUnique(arr, value, maxLen = 50) {
+    const v = String(value || '').trim();
+    if (!v) return;
+    if (arr.includes(v)) return;
+    arr.push(v);
+    if (arr.length > maxLen) arr.splice(0, arr.length - maxLen);
+  }
+
+  function getOrCreateMeaningBucket(result, pos) {
+    const p = String(pos || '').trim();
+    if (!p) return null;
+    let bucket = result.meanings.find(m => m.pos === p);
+    if (!bucket) {
+      bucket = { pos: p, definitions: [] };
+      result.meanings.push(bucket);
+    }
+    return bucket;
+  }
+
+  function applyWordQueryNdjsonEvent(result, evt) {
+    const type = String(evt?.type || '').trim();
+    if (!type) return null;
+
+    if (type === 'meta') {
+      if (evt.word) result.word = normalizeWordQueryText(evt.word) || result.word;
+      const parts = Array.isArray(evt.parts_of_speech) ? evt.parts_of_speech : [];
+      parts.forEach(p => pushUnique(result.parts_of_speech, p, 16));
+      return null;
+    }
+
+    if (type === 'pos') {
+      pushUnique(result.parts_of_speech, evt.value, 16);
+      return null;
+    }
+
+    if (type === 'meaning') {
+      const bucket = getOrCreateMeaningBucket(result, evt.pos);
+      if (!bucket) return null;
+      pushUnique(bucket.definitions, evt.definition, 12);
+      return null;
+    }
+
+    if (type === 'inflection') {
+      pushUnique(result.inflections, evt.value, 24);
+      return null;
+    }
+
+    if (type === 'collocation') {
+      pushUnique(result.collocations, evt.value, 24);
+      return null;
+    }
+
+    if (type === 'final' && evt.data && typeof evt.data === 'object') {
+      return normalizeWordQueryResult(evt.data, result.word);
+    }
+
+    return null;
+  }
+
+  function queryWordDetailsEnglishStream(word, { onPartialData, onRawText } = {}) {
+    const cleaned = normalizeWordQueryText(word);
+    if (!cleaned) return { promise: Promise.reject(new Error('Empty word')), cancel: () => {} };
+    if (!config?.queryApiEndpoint || !config?.queryModelName) {
+      return { promise: Promise.reject(new Error('Query API is not configured')), cancel: () => {} };
+    }
+
+    const prompt = `You are an English dictionary assistant.
+
+Given the word/phrase: ${JSON.stringify(cleaned)}
+
+Stream output as NDJSON (one JSON object per line, no Markdown, no code fences).
+Event types (examples):
+- {"type":"meta","word":"...","parts_of_speech":["noun","verb"]}
+- {"type":"meaning","pos":"noun","definition":"..."}
+- {"type":"inflection","value":"..."}
+- {"type":"collocation","value":"..."}
+- {"type":"final","data":{...full schema below...}}
+
+The final schema in the final event must be:
+{"word":string,"parts_of_speech":string[],"meanings":[{"pos":string,"definitions":string[]}],"inflections":string[],"collocations":string[]}
+
+Requirements:
+- Definitions must be in English, concise.
+- Include common inflections/variants when applicable.
+- Include common collocations/phrases (5-12 items).
+- Do NOT include example sentences.`;
+
+    const result = createEmptyWordQueryResult(cleaned);
+    let ndjsonBuffer = '';
+    let finalData = null;
+    let emittedAt = 0;
+    let parsedAny = false;
+
+    const stream = apiRequestStreamViaBackground(config.queryApiEndpoint, config.queryApiKey, {
+      model: config.queryModelName,
+      messages: [
+        { role: 'system', content: 'Output NDJSON events only. End with a final event.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.1,
+      max_tokens: 900,
+      stream: true
+    }, {
+      onDelta: (delta, fullText) => {
+        if (typeof onRawText === 'function' && !parsedAny) {
+          try { onRawText(fullText); } catch {}
+        }
+
+        ndjsonBuffer += delta;
+        const lines = ndjsonBuffer.split(/\r?\n/);
+        ndjsonBuffer = lines.pop() || '';
+
+        for (const rawLine of lines) {
+          const line = String(rawLine || '').trim();
+          if (!line) continue;
+          let evt = null;
+          try { evt = JSON.parse(line); } catch { evt = null; }
+          if (!evt || typeof evt !== 'object') continue;
+          parsedAny = true;
+          const maybeFinal = applyWordQueryNdjsonEvent(result, evt);
+          if (maybeFinal) finalData = maybeFinal;
+        }
+
+        if (typeof onPartialData === 'function' && parsedAny) {
+          const now = Date.now();
+          if (now - emittedAt >= 120) {
+            emittedAt = now;
+            try { onPartialData(result); } catch {}
+          }
+        }
+      }
+    });
+
+    const promise = stream.promise.then((text) => {
+      // flush buffer
+      const rest = String(ndjsonBuffer || '').trim();
+      if (rest) {
+        const restLines = rest.split(/\r?\n/);
+        for (const rawLine of restLines) {
+          const line = String(rawLine || '').trim();
+          if (!line) continue;
+          let evt = null;
+          try { evt = JSON.parse(line); } catch { evt = null; }
+          if (!evt || typeof evt !== 'object') continue;
+          parsedAny = true;
+          const maybeFinal = applyWordQueryNdjsonEvent(result, evt);
+          if (maybeFinal) finalData = maybeFinal;
+        }
+      }
+
+      if (finalData) return finalData;
+
+      // Fallback: model may ignore NDJSON and just output a JSON object at the end
+      const parsed = tryParseJsonObject(text);
+      if (parsed) return normalizeWordQueryResult(parsed, cleaned);
+
+      if (parsedAny) return normalizeWordQueryResult(result, cleaned);
+      throw new Error('Invalid stream response');
+    });
+
+    return { promise, cancel: stream.cancel };
+  }
+
   function prefetchWordQuery(word) {
     if (!config?.enableWordQuery) return Promise.resolve(null);
     const key = makeWordQueryCacheKey(word);
@@ -1163,6 +1406,35 @@ Requirements:
 
     wordQueryInFlight.set(key, promise);
     return promise;
+  }
+
+  function prefetchWordQueryStreaming(word, { onPartialData, onRawText } = {}) {
+    if (!config?.enableWordQuery) return { promise: Promise.resolve(null), cancel: () => {} };
+    const key = makeWordQueryCacheKey(word);
+    if (!key) return { promise: Promise.resolve(null), cancel: () => {} };
+
+    const cached = wordQueryCache.get(key);
+    if (cached?.data) {
+      wordQueryCache.delete(key);
+      wordQueryCache.set(key, cached);
+      return { promise: Promise.resolve(cached.data), cancel: () => {} };
+    }
+
+    if (wordQueryInFlight.has(key)) {
+      return { promise: wordQueryInFlight.get(key), cancel: () => {} };
+    }
+
+    const stream = queryWordDetailsEnglishStream(word, { onPartialData, onRawText });
+    const promise = stream.promise.then((data) => {
+      upsertWordQueryCacheItem(key, data);
+      scheduleSaveWordQueryCache();
+      return data;
+    }).finally(() => {
+      wordQueryInFlight.delete(key);
+    });
+
+    wordQueryInFlight.set(key, promise);
+    return { promise, cancel: stream.cancel };
   }
 
   async function translateParagraphToTarget(text, sourceLang, targetLang) {
@@ -2275,6 +2547,15 @@ ${uncached.join(', ')}
     `;
   }
 
+  function buildTooltipQueryHtmlStreaming(previewText) {
+    const shown = String(previewText || '').slice(0, 4000);
+    return `
+      <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
+      <div class="vocabmeld-tooltip-query-status">生成中…</div>
+      <pre class="vocabmeld-tooltip-query-stream">${escapeHtml(shown)}</pre>
+    `;
+  }
+
   function buildTooltipQueryHtmlError(message) {
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
@@ -2282,7 +2563,7 @@ ${uncached.join(', ')}
     `;
   }
 
-  function buildTooltipQueryHtmlData(data) {
+  function buildTooltipQueryHtmlData(data, { statusText = '', isPartial = false } = {}) {
     const safeWord = escapeHtml(data?.word || '');
     const parts = Array.isArray(data?.parts_of_speech) ? data.parts_of_speech : [];
     const meanings = Array.isArray(data?.meanings) ? data.meanings : [];
@@ -2298,7 +2579,16 @@ ${uncached.join(', ')}
           const pos = escapeHtml(m?.pos || '');
           const defs = Array.isArray(m?.definitions) ? m.definitions : [];
           const defsHtml = defs.length
-            ? `<ol class="vocabmeld-tooltip-query-defs">${defs.map(d => `<li>${escapeHtml(d)}</li>`).join('')}</ol>`
+            ? `
+              <div class="vocabmeld-tooltip-query-defs">
+                ${defs.map((d, idx) => `
+                  <div class="vocabmeld-tooltip-query-def-item">
+                    <span class="vocabmeld-tooltip-query-def-idx">${idx + 1}.</span>
+                    <span class="vocabmeld-tooltip-query-def-text">${escapeHtml(d)}</span>
+                  </div>
+                `).join('')}
+              </div>
+            `
             : '';
           return `
             <div class="vocabmeld-tooltip-query-sense">
@@ -2307,7 +2597,7 @@ ${uncached.join(', ')}
             </div>
           `;
         }).join('')
-      : `<div class="vocabmeld-tooltip-query-status">暂无结果</div>`;
+      : `<div class="vocabmeld-tooltip-query-status">${isPartial ? '等待内容…' : '暂无结果'}</div>`;
 
     const inflectionsHtml = inflections.length
       ? `<div class="vocabmeld-tooltip-query-meta"><span class="vocabmeld-tooltip-query-label">Inflections</span> ${escapeHtml(inflections.join(' · '))}</div>`
@@ -2319,6 +2609,7 @@ ${uncached.join(', ')}
 
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
+      ${statusText ? `<div class="vocabmeld-tooltip-query-status">${escapeHtml(statusText)}</div>` : ''}
       ${safeWord ? `<div class="vocabmeld-tooltip-query-word">${safeWord}</div>` : ''}
       ${partsLine}
       ${meaningsHtml}
@@ -2344,6 +2635,11 @@ ${uncached.join(', ')}
     const queryWord = normalizeWordQueryText(translation);
     const queryKey = makeWordQueryCacheKey(queryWord);
     tooltip.dataset.wordQueryKey = queryKey;
+
+    if (activeWordQueryStream?.key && activeWordQueryStream.key !== queryKey) {
+      try { activeWordQueryStream.cancel?.(); } catch {}
+      activeWordQueryStream = null;
+    }
 
     let queryInnerHtml = '';
     let shouldFetchQuery = false;
@@ -2398,16 +2694,38 @@ ${uncached.join(', ')}
     activeTooltipTarget = element;
 
     if (shouldFetchQuery && queryWord) {
-      prefetchWordQuery(queryWord).then((data) => {
+      let hasStructuredUpdate = false;
+      const stream = prefetchWordQueryStreaming(queryWord, {
+        onPartialData: (partial) => {
+          hasStructuredUpdate = true;
+          if (!tooltip || tooltip.style.display !== 'block') return;
+          if (tooltip.dataset.wordQueryKey !== queryKey) return;
+          const liveContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+          if (!liveContainer) return;
+          liveContainer.innerHTML = buildTooltipQueryHtmlData(partial, { statusText: '生成中…', isPartial: true });
+        },
+        onRawText: (text) => {
+          if (hasStructuredUpdate) return;
+          if (!tooltip || tooltip.style.display !== 'block') return;
+          if (tooltip.dataset.wordQueryKey !== queryKey) return;
+          const liveContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+          if (!liveContainer) return;
+          liveContainer.innerHTML = buildTooltipQueryHtmlStreaming(text);
+        }
+      });
+
+      activeWordQueryStream = { key: queryKey, cancel: stream.cancel };
+
+      stream.promise.then((data) => {
         if (!tooltip || tooltip.style.display !== 'block') return;
         if (tooltip.dataset.wordQueryKey !== queryKey) return;
-        const container = tooltip.querySelector('.vocabmeld-tooltip-query');
-        if (container) container.innerHTML = buildTooltipQueryHtmlData(data);
+        const finalContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+        if (finalContainer) finalContainer.innerHTML = buildTooltipQueryHtmlData(data);
       }).catch((err) => {
         if (!tooltip || tooltip.style.display !== 'block') return;
         if (tooltip.dataset.wordQueryKey !== queryKey) return;
-        const container = tooltip.querySelector('.vocabmeld-tooltip-query');
-        if (container) container.innerHTML = buildTooltipQueryHtmlError(err?.message || String(err));
+        const errorContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+        if (errorContainer) errorContainer.innerHTML = buildTooltipQueryHtmlError(err?.message || String(err));
       });
     }
   }
@@ -2418,12 +2736,20 @@ ${uncached.join(', ')}
       if (tooltip) tooltip.style.display = 'none';
       activeTooltipTarget = null;
       if (tooltip) tooltip.dataset.wordQueryKey = '';
+      if (activeWordQueryStream?.cancel) {
+        try { activeWordQueryStream.cancel(); } catch {}
+      }
+      activeWordQueryStream = null;
     } else {
       // 延迟隐藏，给用户时间移动到 tooltip 上
       tooltipHideTimeout = setTimeout(() => {
         if (tooltip) tooltip.style.display = 'none';
         activeTooltipTarget = null;
         if (tooltip) tooltip.dataset.wordQueryKey = '';
+        if (activeWordQueryStream?.cancel) {
+          try { activeWordQueryStream.cancel(); } catch {}
+        }
+        activeWordQueryStream = null;
       }, 150);
     }
   }
