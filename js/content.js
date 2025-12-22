@@ -1418,6 +1418,15 @@ Requirements:
 
     const existing = wordQueryInFlight.get(key);
     if (existing?.promise) {
+      const now = Date.now();
+      const lastProgressAt = existing.state?.lastProgressAt || existing.state?.startedAt || 0;
+      // If an in-flight request has no progress for a long time, treat it as stuck and restart.
+      if (lastProgressAt && (now - lastProgressAt) > 20_000) {
+        try { existing.cancel?.(); } catch {}
+        wordQueryInFlight.delete(key);
+        // restart fresh
+        return prefetchWordQueryStreaming(word, { onPartialData, onRawText, onDone, onError });
+      }
       if (onPartialData || onRawText || onDone || onError) {
         existing.listeners.add({ onPartialData, onRawText, onDone, onError });
         if (existing.state?.hasStructured && typeof onPartialData === 'function') {
@@ -1431,7 +1440,13 @@ Requirements:
 
     const entry = {
       listeners: new Set(),
-      state: { rawText: '', partial: createEmptyWordQueryResult(word), hasStructured: false }
+      state: {
+        rawText: '',
+        partial: createEmptyWordQueryResult(word),
+        hasStructured: false,
+        startedAt: Date.now(),
+        lastProgressAt: Date.now()
+      }
     };
 
     if (onPartialData || onRawText || onDone || onError) {
@@ -1442,10 +1457,12 @@ Requirements:
       onPartialData: (partial) => {
         entry.state.partial = partial;
         entry.state.hasStructured = true;
+        entry.state.lastProgressAt = Date.now();
         notifyWordQueryListeners(entry, 'partial', partial);
       },
       onRawText: (text) => {
         entry.state.rawText = text;
+        entry.state.lastProgressAt = Date.now();
         if (!entry.state.hasStructured) notifyWordQueryListeners(entry, 'raw', text);
       }
     });
@@ -2874,9 +2891,6 @@ ${uncached.join(', ')}
       activeTooltipTarget = null;
       if (tooltip) tooltip.dataset.wordQueryKey = '';
       if (tooltip) tooltip.dataset.wordQueryWord = '';
-      if (activeWordQueryStream?.cancel) {
-        try { activeWordQueryStream.cancel(); } catch {}
-      }
       activeWordQueryStream = null;
     } else {
       // 延迟隐藏，给用户时间移动到 tooltip 上
@@ -2885,9 +2899,6 @@ ${uncached.join(', ')}
         activeTooltipTarget = null;
         if (tooltip) tooltip.dataset.wordQueryKey = '';
         if (tooltip) tooltip.dataset.wordQueryWord = '';
-        if (activeWordQueryStream?.cancel) {
-          try { activeWordQueryStream.cancel(); } catch {}
-        }
         activeWordQueryStream = null;
       }, 150);
     }
