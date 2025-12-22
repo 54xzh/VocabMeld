@@ -1034,7 +1034,7 @@
     });
   }
 
-  function callApiViaBackgroundWith(endpoint, apiKey, body) {
+  function callApiViaBackgroundWith(endpoint, apiKey, body, { queue } = {}) {
     if (document.hidden || !isTabActive) {
       return Promise.reject(new Error('Paused: tab is not active'));
     }
@@ -1043,7 +1043,8 @@
         action: 'apiRequest',
         endpoint,
         apiKey,
-        body
+        body,
+        queue
       }, response => {
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
@@ -1195,7 +1196,7 @@ Requirements:
       ],
       temperature: 0.1,
       max_tokens: 900
-    });
+    }, { queue: 'query' });
 
     const content = extractAssistantText(apiResponse);
     const parsed = tryParseJsonObject(content);

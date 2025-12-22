@@ -47,7 +47,9 @@ let apiRateConfig = {
   maxConcurrentRequests: DEFAULT_MAX_CONCURRENT_REQUESTS
 };
 
-let activeRequestCount = 0; // 当前正在进行的请求数
+let activeRequestCount = 0; // total
+let activeTranslationRequestCount = 0;
+let activeQueryRequestCount = 0;
 
 let apiRateConfigLoaded = false;
 let apiRateConfigLoadingPromise = null;
@@ -95,7 +97,8 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
-const apiRequestQueue = [];
+const apiRequestQueue = []; // translation + other non-query requests
+const queryRequestQueue = []; // word query requests (high priority)
 let apiQueueProcessing = false;
 let apiLastRequestStartAt = 0;
 let apiRecentRequestStarts = [];
@@ -155,11 +158,16 @@ function cancelRequestsForTab(tabId) {
   }
 
   // Drop queued requests
-  for (let i = apiRequestQueue.length - 1; i >= 0; i--) {
-    const item = apiRequestQueue[i];
-    if (item?.tabId === tabId) {
-      apiRequestQueue.splice(i, 1);
-      safeSendResponse(item.sendResponse, { success: false, error: 'Tab closed' });
+  for (const queue of [apiRequestQueue, queryRequestQueue]) {
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const item = queue[i];
+      if (item?.tabId !== tabId) continue;
+      queue.splice(i, 1);
+      if (item.streamPort && item.streamId) {
+        safePortPostMessage(item.streamPort, { type: 'apiStreamError', streamId: item.streamId, error: 'Tab closed' });
+      } else if (item.sendResponse) {
+        safeSendResponse(item.sendResponse, { success: false, error: 'Tab closed' });
+      }
     }
   }
 }
@@ -239,18 +247,21 @@ async function processApiQueue() {
   try {
     await loadApiRateConfig();
 
-    function pickNextQueueItem(preferredTabId) {
-      if (apiRequestQueue.length === 0) return null;
+    function pickNextQueueItem(queue, preferredTabId) {
+      if (queue.length === 0) return null;
       if (Number.isInteger(preferredTabId)) {
-        const idx = apiRequestQueue.findIndex(item => item?.tabId === preferredTabId);
-        if (idx >= 0) return apiRequestQueue.splice(idx, 1)[0];
+        const idx = queue.findIndex(item => item?.tabId === preferredTabId);
+        if (idx >= 0) return queue.splice(idx, 1)[0];
       }
-      return apiRequestQueue.shift();
+      return queue.shift();
     }
 
     // 并行处理请求的辅助函数
     async function processItem(item) {
+      const queueType = item?.queueType || 'translation';
+      const isQuery = queueType === 'query';
       activeRequestCount++;
+      if (isQuery) activeQueryRequestCount++; else activeTranslationRequestCount++;
       const startedAt = Date.now();
       apiLastRequestStartAt = startedAt;
       apiRecentRequestStarts.push(startedAt);
@@ -262,7 +273,7 @@ async function processApiQueue() {
       try {
         const endpointLabel = safeEndpointLabel(item.endpoint);
         const modelLabel = item.body?.model ? `model=${item.body.model}` : '';
-        console.info('[VocabMeld][API] Request start:', endpointLabel, modelLabel, `concurrent=${activeRequestCount}`);
+        console.info('[VocabMeld][API] Request start:', endpointLabel, modelLabel, `queue=${queueType}`, `concurrent=${activeRequestCount}`);
 
         if (item.streamPort && item.streamId) {
           const fullText = await callApiStream(item.endpoint, item.apiKey, item.body, {
@@ -288,6 +299,7 @@ async function processApiQueue() {
       } finally {
         untrackActiveApiRequest(requestId);
         activeRequestCount--;
+        if (isQuery) activeQueryRequestCount--; else activeTranslationRequestCount--;
         // 当一个请求完成时，尝试启动更多请求
         scheduleNext();
       }
@@ -296,8 +308,10 @@ async function processApiQueue() {
     // 调度下一个请求
     async function scheduleNext() {
       const maxConcurrent = apiRateConfig.maxConcurrentRequests || 1;
+      const reservedForQuery = maxConcurrent >= 2 ? 1 : 0;
+      const maxTranslationConcurrent = Math.max(0, maxConcurrent - reservedForQuery);
 
-      while (apiRequestQueue.length > 0 && activeRequestCount < maxConcurrent) {
+      while ((queryRequestQueue.length > 0 || apiRequestQueue.length > 0) && activeRequestCount < maxConcurrent) {
         const now = Date.now();
         const delay = computeNextDelayMs(now);
 
@@ -307,15 +321,29 @@ async function processApiQueue() {
           return;
         }
 
-        const item = pickNextQueueItem(activeTabId);
+        // 优先调度查询队列（低延迟）
+        let item = pickNextQueueItem(queryRequestQueue, activeTabId);
+        if (item) {
+          item.queueType = 'query';
+          processItem(item);
+          continue;
+        }
+
+        // 再调度翻译队列，但不占用为查询预留的并发槽位
+        if (activeTranslationRequestCount >= maxTranslationConcurrent) {
+          return;
+        }
+
+        item = pickNextQueueItem(apiRequestQueue, activeTabId);
         if (!item) continue;
+        item.queueType = 'translation';
 
         // 启动请求（不等待完成）
         processItem(item);
       }
 
       // 如果队列为空且没有活跃请求，结束处理
-      if (apiRequestQueue.length === 0 && activeRequestCount === 0) {
+      if (apiRequestQueue.length === 0 && queryRequestQueue.length === 0 && activeRequestCount === 0) {
         apiQueueProcessing = false;
       }
     }
@@ -331,9 +359,11 @@ async function processApiQueue() {
 
 function removeQueuedRequestsByIds(ids) {
   if (!ids || ids.size === 0) return;
-  for (let i = apiRequestQueue.length - 1; i >= 0; i--) {
-    const item = apiRequestQueue[i];
-    if (ids.has(item?.requestId)) apiRequestQueue.splice(i, 1);
+  for (const queue of [apiRequestQueue, queryRequestQueue]) {
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const item = queue[i];
+      if (ids.has(item?.requestId)) queue.splice(i, 1);
+    }
   }
 }
 
@@ -493,13 +523,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const updatedBody = { ...body, model: selectedModel };
     const tabId = sender?.tab?.id;
 
-    apiRequestQueue.push({
+    const isQuery = message.queue === 'query';
+    const queue = isQuery ? queryRequestQueue : apiRequestQueue;
+    queue.push({
       requestId: apiRequestIdSeq++,
       endpoint: message.endpoint,
       apiKey: message.apiKey,
       body: updatedBody,
       tabId,
-      sendResponse
+      sendResponse,
+      queueType: isQuery ? 'query' : 'translation'
     });
     processApiQueue().catch(err => {
       safeSendResponse(sendResponse, { success: false, error: err?.message || String(err) });
@@ -588,14 +621,15 @@ chrome.runtime.onConnect.addListener((port) => {
     const tabId = port?.sender?.tab?.id;
 
     const requestId = apiRequestIdSeq++;
-    apiRequestQueue.push({
+    queryRequestQueue.push({
       requestId,
       endpoint: message.endpoint,
       apiKey: message.apiKey,
       body: updatedBody,
       tabId,
       streamPort: port,
-      streamId: message.streamId
+      streamId: message.streamId,
+      queueType: 'query'
     });
 
     const set = streamRequestIdsByPort.get(port) || new Set();
