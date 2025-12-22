@@ -2633,9 +2633,6 @@ ${uncached.join(', ')}
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询</div>
       <div class="vocabmeld-tooltip-query-status">未启用（设置 → API 配置 → 查询配置）</div>
-      <div class="vocabmeld-tooltip-query-actions">
-        <button type="button" class="vocabmeld-tooltip-query-retry" disabled title="请先在设置中启用查询">重试</button>
-      </div>
     `;
   }
 
@@ -2643,9 +2640,6 @@ ${uncached.join(', ')}
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询</div>
       <div class="vocabmeld-tooltip-query-status">未配置查询 API</div>
-      <div class="vocabmeld-tooltip-query-actions">
-        <button type="button" class="vocabmeld-tooltip-query-retry" disabled title="请先配置查询 API">重试</button>
-      </div>
     `;
   }
 
@@ -2653,9 +2647,6 @@ ${uncached.join(', ')}
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
       <div class="vocabmeld-tooltip-query-status">加载中…</div>
-      <div class="vocabmeld-tooltip-query-actions">
-        <button type="button" class="vocabmeld-tooltip-query-retry">重试</button>
-      </div>
     `;
   }
 
@@ -2664,9 +2655,6 @@ ${uncached.join(', ')}
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
       <div class="vocabmeld-tooltip-query-status">生成中…</div>
-      <div class="vocabmeld-tooltip-query-actions">
-        <button type="button" class="vocabmeld-tooltip-query-retry">重试</button>
-      </div>
       <pre class="vocabmeld-tooltip-query-stream">${escapeHtml(shown)}</pre>
     `;
   }
@@ -2675,9 +2663,6 @@ ${uncached.join(', ')}
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
       <div class="vocabmeld-tooltip-query-status vocabmeld-tooltip-query-error">查询失败：${escapeHtml(message || '')}</div>
-      <div class="vocabmeld-tooltip-query-actions">
-        <button type="button" class="vocabmeld-tooltip-query-retry">重试</button>
-      </div>
     `;
   }
 
@@ -2727,9 +2712,6 @@ ${uncached.join(', ')}
 
     return `
       <div class="vocabmeld-tooltip-query-title">AI 查询（英文释义）</div>
-      <div class="vocabmeld-tooltip-query-actions">
-        <button type="button" class="vocabmeld-tooltip-query-retry">重试</button>
-      </div>
       ${statusText ? `<div class="vocabmeld-tooltip-query-status">${escapeHtml(statusText)}</div>` : ''}
       ${safeWord ? `<div class="vocabmeld-tooltip-query-word">${safeWord}</div>` : ''}
       ${partsLine}
@@ -2804,6 +2786,11 @@ ${uncached.join(', ')}
         <button class="vocabmeld-tooltip-btn vocabmeld-btn-learned" data-original="${escapeHtml(original)}" data-translation="${escapeHtml(translation)}" data-difficulty="${escapeHtml(difficulty)}" title="标记已学会">
           <svg viewBox="0 0 24 24" width="16" height="16">
             <path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"/>
+          </svg>
+        </button>
+        <button class="vocabmeld-tooltip-btn vocabmeld-btn-retry" data-word="${escapeHtml(queryWord)}" ${(!config?.enableWordQuery || !config?.queryApiEndpoint || !config?.queryModelName || !queryKey) ? 'disabled' : ''} title="重新查询释义/变形">
+          <svg viewBox="0 0 24 24" width="16" height="16">
+            <path fill="currentColor" d="M12,6V9L16,5L12,1V4A8,8 0 0,0 4,12H6A6,6 0 0,1 12,6M18,12A6,6 0 0,1 12,18V15L8,19L12,23V20A8,8 0 0,0 20,12H18Z"/>
           </svg>
         </button>
       </div>
@@ -3027,11 +3014,11 @@ ${uncached.join(', ')}
 
     // tooltip 按钮点击事件
     document.addEventListener('click', (e) => {
-      const retryBtn = e.target.closest?.('.vocabmeld-tooltip-query-retry');
+      const retryBtn = e.target.closest?.('.vocabmeld-btn-retry');
       if (retryBtn) {
         e.preventDefault();
         e.stopPropagation();
-        const word = tooltip?.dataset?.wordQueryWord || (activeTooltipTarget?.getAttribute?.('data-translation') || '');
+        const word = retryBtn.getAttribute('data-word') || tooltip?.dataset?.wordQueryWord || (activeTooltipTarget?.getAttribute?.('data-translation') || '');
         forceRetryWordQuery(word);
         return;
       }
