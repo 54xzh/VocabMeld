@@ -413,6 +413,7 @@ chrome.runtime.onInstalled.addListener((details) => {
       intensity: 'medium',
       autoProcess: true,
       showPhonetic: true,
+      dictionaryType: 'zh-en',
       translationStyle: 'translation-original',
       // 句子/段落翻译（额外翻译为学习语言）
       sentenceTranslationRate: 0,
@@ -582,6 +583,47 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // 通用 fetch 代理（避免 content script CORS 限制）
+  if (message.action === 'fetchProxy') {
+    const url = message.url;
+    const init = message.options && typeof message.options === 'object' ? message.options : {};
+
+    (async () => {
+      if (!url) {
+        safeSendResponse(sendResponse, { success: false, error: 'Missing url' });
+        return;
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20_000);
+      try {
+        const resp = await fetch(url, {
+          ...init,
+          method: (init.method || 'GET'),
+          signal: controller.signal
+        });
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => '');
+          safeSendResponse(sendResponse, { success: false, error: text || `HTTP ${resp.status}` });
+          return;
+        }
+
+        const text = await resp.text().catch(() => '');
+        try {
+          safeSendResponse(sendResponse, { success: true, data: JSON.parse(text) });
+        } catch {
+          safeSendResponse(sendResponse, { success: true, data: text });
+        }
+      } catch (err) {
+        safeSendResponse(sendResponse, { success: false, error: err?.message || String(err) });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    })();
+
+    return true;
+  }
+
   // 获取统计数据
   if (message.action === 'getStats') {
     chrome.storage.sync.get([
@@ -625,7 +667,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // 清空缓存
   if (message.action === 'clearCache') {
-    chrome.storage.local.remove(['vocabmeld_word_cache', 'vocabmeld_word_query_cache'], () => {
+    chrome.storage.local.remove(['vocabmeld_word_cache', 'vocabmeld_word_query_cache', 'vocabmeld_dict_cache'], () => {
       chrome.storage.sync.set({ cacheHits: 0, cacheMisses: 0 }, () => {
         sendResponse({ success: true });
       });

@@ -30,6 +30,8 @@
   const DEFAULT_WORD_QUERY_CACHE_MAX_SIZE = 500;
   const WORD_QUERY_CACHE_STORAGE_KEY = 'vocabmeld_word_query_cache';
   const WORD_QUERY_HOVER_DELAY_MS = 200;
+  const DICT_CACHE_STORAGE_KEY = 'vocabmeld_dict_cache';
+  const DICT_CACHE_MAX_SIZE = 500;
   const DEFAULT_SENTENCE_TRANSLATION_RATE = 0; // 0-100
   const DEFAULT_PARAGRAPH_TRANSLATION_RATE = 0; // 0-100
   const MAX_SENTENCE_TRANSLATIONS_PER_PARAGRAPH = 3;
@@ -68,6 +70,11 @@
   let wordQueryHoverStream = null; // { key, cancel }
   let activeWordQueryStream = null; // { key, cancel }
   let cachedCjkWordsByLangPair = new Map(); // `${sourceLang}:${targetLang}` -> Set(lowerCjkWord)
+  let dictCache = new Map(); // cacheKey -> dictData|null
+  let persistentDictCache = null; // Map(cacheKey -> dictData|null), LRU
+  let dictCacheInitPromise = null;
+  let dictPersistTimer = null;
+  let tooltipExplainMode = 'ai'; // 'ai' | 'dict'
   let tooltip = null;
   let selectionPopup = null;
   let intersectionObserver = null;
@@ -347,6 +354,320 @@
     }
   }
 
+  // ============ 词典解释（有道 / Wiktionary） ============
+  function scheduleDictCachePersist(delay = 500) {
+    if (dictPersistTimer) clearTimeout(dictPersistTimer);
+    dictPersistTimer = setTimeout(() => {
+      dictPersistTimer = null;
+      if (!persistentDictCache) return;
+      const data = [];
+      for (const [key, value] of persistentDictCache) data.push({ key, value });
+      chrome.storage.local.set({ [DICT_CACHE_STORAGE_KEY]: data }, () => {});
+    }, delay);
+  }
+
+  async function ensureDictCacheLoaded() {
+    if (persistentDictCache) return;
+    if (dictCacheInitPromise) return dictCacheInitPromise;
+    dictCacheInitPromise = new Promise((resolve) => {
+      chrome.storage.local.get(DICT_CACHE_STORAGE_KEY, (result) => {
+        const raw = result?.[DICT_CACHE_STORAGE_KEY];
+        persistentDictCache = new Map();
+        if (Array.isArray(raw)) {
+          for (const item of raw) {
+            if (!item || typeof item.key !== 'string') continue;
+            persistentDictCache.set(item.key, item.value ?? null);
+          }
+        }
+        while (persistentDictCache.size > DICT_CACHE_MAX_SIZE) {
+          const firstKey = persistentDictCache.keys().next().value;
+          persistentDictCache.delete(firstKey);
+        }
+        resolve();
+      });
+    }).finally(() => {
+      dictCacheInitPromise = null;
+    });
+    return dictCacheInitPromise;
+  }
+
+  async function getDictCacheValue(cacheKey) {
+    await ensureDictCacheLoaded();
+    if (!persistentDictCache?.has(cacheKey)) return undefined;
+    const value = persistentDictCache.get(cacheKey);
+    // LRU: move to tail
+    persistentDictCache.delete(cacheKey);
+    persistentDictCache.set(cacheKey, value);
+    return value;
+  }
+
+  async function setDictCacheValue(cacheKey, value) {
+    await ensureDictCacheLoaded();
+    if (!persistentDictCache) persistentDictCache = new Map();
+    if (persistentDictCache.has(cacheKey)) persistentDictCache.delete(cacheKey);
+    while (persistentDictCache.size >= DICT_CACHE_MAX_SIZE) {
+      const firstKey = persistentDictCache.keys().next().value;
+      persistentDictCache.delete(firstKey);
+    }
+    persistentDictCache.set(cacheKey, value ?? null);
+    scheduleDictCachePersist();
+  }
+
+  function touchDictMemoryCache(cacheKey, value) {
+    if (dictCache.has(cacheKey)) dictCache.delete(cacheKey);
+    dictCache.set(cacheKey, value ?? null);
+    while (dictCache.size > DICT_CACHE_MAX_SIZE) {
+      const firstKey = dictCache.keys().next().value;
+      dictCache.delete(firstKey);
+    }
+  }
+
+  function fetchProxyJson(url) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ action: 'fetchProxy', url }, (res) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else if (!res?.success) {
+          reject(new Error(res?.error || 'Fetch failed'));
+        } else {
+          resolve(res.data);
+        }
+      });
+    });
+  }
+
+  async function fetchYoudaoData(word) {
+    try {
+      const url = `https://dict.youdao.com/jsonapi?q=${encodeURIComponent(word)}&doctype=json`;
+      const response = await fetchProxyJson(url);
+      const ecData = response?.ec?.word?.[0];
+      if (!ecData) return null;
+
+      const phonetic = ecData.usphone ? `/${ecData.usphone}/` : (ecData.ukphone ? `/${ecData.ukphone}/` : '');
+
+      const meanings = [];
+      const trs = ecData.trs || [];
+      for (const tr of trs.slice(0, 3)) {
+        const defText = tr.tr?.[0]?.l?.i?.[0] || '';
+        if (!defText) continue;
+        const match = defText.match(/^([a-z]+\.)\s*(.+)$/i);
+        if (match) {
+          const pos = match[1];
+          const def = match[2];
+          const existing = meanings.find(m => m.partOfSpeech === pos);
+          if (existing) {
+            if (existing.definitions.length < 3) existing.definitions.push(def);
+          } else {
+            meanings.push({ partOfSpeech: pos, definitions: [def] });
+          }
+        } else {
+          meanings.push({ partOfSpeech: '', definitions: [defText] });
+        }
+      }
+
+      if (meanings.length === 0) return null;
+      return { word, phonetic, meanings };
+    } catch (e) {
+      console.error('[VocabMeld] Youdao fetch error:', e);
+      return null;
+    }
+  }
+
+  async function fetchWiktionaryData(word) {
+    try {
+      const url = `https://en.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(word)}&format=json&prop=text&origin=*`;
+      const data = await fetchProxyJson(url);
+      if (data?.error || !data?.parse?.text?.['*']) return null;
+
+      const htmlString = data.parse.text['*'];
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlString, 'text/html');
+      const contentRoot = doc.querySelector('.mw-parser-output') || doc.body;
+
+      const phoneticEl = contentRoot.querySelector('.IPA');
+      const phonetic = phoneticEl?.textContent?.trim() || '';
+
+      const validPOS = [
+        'Noun',
+        'Verb',
+        'Adjective',
+        'Adverb',
+        'Interjection',
+        'Pronoun',
+        'Preposition',
+        'Conjunction'
+      ];
+
+      const meaningsMap = new Map();
+      const headers = contentRoot.querySelectorAll('h3, h4');
+      for (const header of headers) {
+        const headerText = header.textContent.replace(/\[.*?\]/g, '').trim();
+        const matchedPOS = validPOS.find(pos => headerText.includes(pos));
+        if (!matchedPOS) continue;
+
+        let currentNode = header.parentNode?.classList?.contains('mw-heading') ? header.parentNode : header;
+        let definitionList = null;
+        while (currentNode?.nextElementSibling) {
+          currentNode = currentNode.nextElementSibling;
+          if (currentNode.tagName === 'OL') {
+            definitionList = currentNode;
+            break;
+          }
+          if (['H2', 'H3', 'H4'].includes(currentNode.tagName)) break;
+        }
+        if (!definitionList) continue;
+
+        const listItems = definitionList.querySelectorAll(':scope > li');
+        for (const li of Array.from(listItems).slice(0, 2)) {
+          const cloneLi = li.cloneNode(true);
+          cloneLi
+            .querySelectorAll('.h-usage-example, .e-example, ul, dl, .reference, .citation')
+            .forEach(el => el.remove());
+          const defText = cloneLi.textContent.replace(/<[^>]*>/g, '').trim().slice(0, 150);
+          if (!defText) continue;
+          if (!meaningsMap.has(matchedPOS)) meaningsMap.set(matchedPOS, []);
+          const defs = meaningsMap.get(matchedPOS);
+          if (defs.length < 3) defs.push(defText);
+        }
+      }
+
+      const meanings = [];
+      for (const [pos, defs] of meaningsMap) {
+        if (meanings.length >= 3) break;
+        if (defs.length > 0) meanings.push({ partOfSpeech: pos, definitions: defs });
+      }
+
+      if (meanings.length === 0) return null;
+      return { word, phonetic, meanings };
+    } catch (e) {
+      console.error('[VocabMeld] Wiktionary fetch error:', e);
+      return null;
+    }
+  }
+
+  async function fetchDictionaryData(word) {
+    const cleaned = normalizeWordQueryText(word);
+    if (!cleaned) return null;
+    const dictionaryType = config?.dictionaryType || 'zh-en';
+    const cacheKey = `${cleaned.toLowerCase()}_${dictionaryType}`;
+
+    // 1) memory cache
+    if (dictCache.has(cacheKey)) return dictCache.get(cacheKey);
+
+    // 2) persisted cache
+    const persisted = await getDictCacheValue(cacheKey);
+    if (persisted !== undefined) {
+      touchDictMemoryCache(cacheKey, persisted);
+      return persisted;
+    }
+
+    try {
+      const result = dictionaryType === 'zh-en'
+        ? await fetchYoudaoData(cleaned)
+        : await fetchWiktionaryData(cleaned);
+      touchDictMemoryCache(cacheKey, result);
+      await setDictCacheValue(cacheKey, result);
+      return result;
+    } catch (e) {
+      console.error('[VocabMeld] Dictionary fetch error:', e);
+      touchDictMemoryCache(cacheKey, null);
+      setDictCacheValue(cacheKey, null);
+      return null;
+    }
+  }
+
+  function buildTooltipDictHtmlLoading(word) {
+    const shown = escapeHtml(word || '');
+    return `
+      <div class="vocabmeld-tooltip-dict-title">词典解释</div>
+      ${shown ? `<div class="vocabmeld-tooltip-dict-word">${shown}</div>` : ''}
+      <div class="vocabmeld-dict-loading">加载词典...</div>
+    `;
+  }
+
+  function buildTooltipDictHtmlUnsupported(word) {
+    const shown = escapeHtml(word || '');
+    return `
+      <div class="vocabmeld-tooltip-dict-title">词典解释</div>
+      ${shown ? `<div class="vocabmeld-tooltip-dict-word">${shown}</div>` : ''}
+      <div class="vocabmeld-dict-empty">仅支持英文单词</div>
+    `;
+  }
+
+  function buildTooltipDictHtmlEmpty(word) {
+    const shown = escapeHtml(word || '');
+    return `
+      <div class="vocabmeld-tooltip-dict-title">词典解释</div>
+      ${shown ? `<div class="vocabmeld-tooltip-dict-word">${shown}</div>` : ''}
+      <div class="vocabmeld-dict-empty">暂无词典数据</div>
+    `;
+  }
+
+  function buildTooltipDictHtmlError(word, message) {
+    const shown = escapeHtml(word || '');
+    return `
+      <div class="vocabmeld-tooltip-dict-title">词典解释</div>
+      ${shown ? `<div class="vocabmeld-tooltip-dict-word">${shown}</div>` : ''}
+      <div class="vocabmeld-dict-empty">加载失败：${escapeHtml(message || '')}</div>
+    `;
+  }
+
+  function buildTooltipDictHtmlData(dictData) {
+    if (!dictData?.meanings?.length) return buildTooltipDictHtmlEmpty(dictData?.word || '');
+    const word = escapeHtml(dictData.word || '');
+    const phonetic = escapeHtml(dictData.phonetic || '');
+    let html = `
+      <div class="vocabmeld-tooltip-dict-title">词典解释</div>
+      ${word ? `<div class="vocabmeld-tooltip-dict-word">${word}</div>` : ''}
+      ${phonetic ? `<div class="vocabmeld-tooltip-dict-phonetic">${phonetic}</div>` : ''}
+    `;
+
+    for (const meaning of dictData.meanings) {
+      html += `<div class="vocabmeld-dict-entry">`;
+      if (meaning.partOfSpeech) {
+        html += `<span class="vocabmeld-dict-pos">${escapeHtml(meaning.partOfSpeech)}</span>`;
+      }
+      html += `<ul class="vocabmeld-dict-defs">`;
+      for (const def of meaning.definitions || []) {
+        html += `<li>${escapeHtml(def)}</li>`;
+      }
+      html += `</ul></div>`;
+    }
+    return html;
+  }
+
+  function normalizeSiteRuleList(value) {
+    const items = Array.isArray(value)
+      ? value
+      : (typeof value === 'string' ? value.split(/\r?\n|,/g) : []);
+
+    return items
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean)
+      .map((item) => {
+        // Allow partial match, but strip protocol/path if user pasted a URL.
+        let s = item.replace(/^[a-z]+:\/\//i, '');
+        s = s.split('/')[0] || '';
+        return s.trim();
+      })
+      .filter(Boolean);
+  }
+
+  function shouldProcessSite(hostname = window.location.hostname) {
+    if (!config?.enabled) return false;
+    const host = String(hostname || '').toLowerCase();
+    if (!host) return true;
+
+    if ((config.siteMode || 'all') === 'all') {
+      const excluded = config.excludedSites || [];
+      return !excluded.some((domain) => domain && host.includes(domain));
+    }
+
+    const allowed = config.allowedSites || [];
+    if (allowed.length === 0) return false;
+    return allowed.some((domain) => domain && host.includes(domain));
+  }
+
   // ============ 存储操作 ============
   async function loadConfig() {
     return new Promise((resolve) => {
@@ -362,6 +683,7 @@
           queryApiConfig: result.queryApiConfig || result.translationApiConfig || result.currentApiConfig || '',
           enableWordQuery: result.enableWordQuery ?? false,
           wordQueryDefinitionDisplay: result.wordQueryDefinitionDisplay || 'both',
+          dictionaryType: result.dictionaryType || 'zh-en',
           nativeLanguage: result.nativeLanguage || 'zh-CN',
           targetLanguage: result.targetLanguage || 'en',
           difficultyLevel: result.difficultyLevel || 'B1',
@@ -377,8 +699,8 @@
           sentenceTranslationRate: result.sentenceTranslationRate ?? DEFAULT_SENTENCE_TRANSLATION_RATE,
           paragraphTranslationRate: result.paragraphTranslationRate ?? DEFAULT_PARAGRAPH_TRANSLATION_RATE,
           siteMode: result.siteMode || 'all',
-          excludedSites: result.excludedSites || result.blacklist || [],
-          allowedSites: result.allowedSites || [],
+          excludedSites: normalizeSiteRuleList(result.excludedSites || result.blacklist || []),
+          allowedSites: normalizeSiteRuleList(result.allowedSites || []),
           learnedWords: result.learnedWords || [],
           memorizeList: result.memorizeList || []
         };
@@ -485,8 +807,9 @@
     }
 
     const trimmedWord = word.trim();
+    const trimmedLower = trimmedWord.toLowerCase();
     const list = config.memorizeList || [];
-    const exists = list.some(w => w.word === trimmedWord);
+    const exists = list.some(w => String(w.word || '').trim().toLowerCase() === trimmedLower);
     
     if (!exists) {
       list.push({ word: trimmedWord, addedAt: Date.now() });
@@ -528,6 +851,18 @@
     } else {
       showToast(`"${trimmedWord}" 已在记忆列表中`);
     }
+  }
+
+  async function removeFromMemorizeList(word) {
+    if (!word || !word.trim()) return;
+    const trimmedWord = word.trim();
+    const trimmedLower = trimmedWord.toLowerCase();
+    const list = config.memorizeList || [];
+    const newList = list.filter(w => String(w.word || '').trim().toLowerCase() !== trimmedLower);
+    if (newList.length === list.length) return;
+    config.memorizeList = newList;
+    await new Promise(resolve => chrome.storage.sync.set({ memorizeList: newList }, resolve));
+    showToast(`"${trimmedWord}" 已从记忆列表移除`);
   }
 
   // ============ DOM 处理 ============
@@ -1805,8 +2140,11 @@ Requirements:
     const sourceLang = isNative ? config.nativeLanguage : detectedLang;
     const targetLang = isNative ? config.targetLanguage : config.nativeLanguage;
     const baseMaxReplacements = INTENSITY_CONFIG[config.intensity]?.maxPerParagraph || 8;
+    const maxReplacementsOverride = Number.isFinite(options.maxReplacementsOverride)
+      ? Math.max(1, Math.floor(options.maxReplacementsOverride))
+      : baseMaxReplacements;
     const maxReplacementsCap = Number.isFinite(options.maxReplacementsCap) ? options.maxReplacementsCap : Infinity;
-    const maxReplacements = Math.max(1, Math.min(baseMaxReplacements, maxReplacementsCap));
+    const maxReplacements = Math.max(1, Math.min(maxReplacementsOverride, maxReplacementsCap));
 
     // 检查缓存 - 只检查有意义的词汇（排除常见停用词）
     const words = (text.match(/\b[a-zA-Z]{5,}\b/g) || []).filter(w => !STOP_WORDS.has(w.toLowerCase()));
@@ -1957,7 +2295,6 @@ Requirements:
 - translation: 翻译结果
 - phonetic: 学习语言(${config.targetLanguage})的音标/发音
 - difficulty: CEFR 难度等级 (A1/A2/B1/B2/C1/C2)，请谨慎评估
-- position: 在文本中的起始位置
 
 ## 文本：
 ${filteredText}
@@ -2046,7 +2383,7 @@ ${filteredText}
           const originalIndex = text.toLowerCase().indexOf(result.original.toLowerCase());
           return {
             ...result,
-            position: originalIndex >= 0 ? originalIndex : result.position
+            position: originalIndex >= 0 ? originalIndex : (Number.isFinite(result.position) ? result.position : 0)
           };
         });
 
@@ -2219,6 +2556,7 @@ ${uncached.join(', ')}
     if (!config?.enabled || !targetWords?.length) {
       return 0;
     }
+    if (!shouldProcessSite()) return 0;
 
     const targetWordSet = new Set(targetWords.map(w => w.toLowerCase()));
     let processed = 0;
@@ -2367,6 +2705,8 @@ ${uncached.join(', ')}
 
   // ============ 页面处理 ============
   const MAX_CONCURRENT = 3; // 最大并发请求数
+  const MAX_SEGMENTS_PER_REQUEST = 5; // 合并段落：每个请求最多处理的段落数
+  const REQUEST_INTERVAL_MS = 1000; // 合并段落：请求间隔（避免触发速率限制）
   const PROCESS_DELAY_MS = 50; // 批次间延迟，避免阻塞主线程
 
   // 使用 IntersectionObserver 实现懒加载
@@ -2378,6 +2718,7 @@ ${uncached.join(', ')}
 
     intersectionObserver = new IntersectionObserver((entries) => {
       if (document.hidden || !isTabActive) return;
+      if (!shouldProcessSite()) return;
       let hasNewVisible = false;
       
       for (const entry of entries) {
@@ -2402,7 +2743,7 @@ ${uncached.join(', ')}
       }
 
       // 有新可见容器时，触发处理
-      if (hasNewVisible && config?.enabled && !isProcessing) {
+      if (hasNewVisible && !isProcessing) {
         processPendingContainers();
       }
     }, {
@@ -2411,10 +2752,120 @@ ${uncached.join(', ')}
     });
   }
 
+  function getSegmentMaxReplacements(segment) {
+    const base = INTENSITY_CONFIG[config?.intensity]?.maxPerParagraph || 8;
+    const cap = Number.isFinite(segment?.maxReplacementsCap) ? segment.maxReplacementsCap : Infinity;
+    return Math.max(1, Math.min(base, cap));
+  }
+
+  function pickSegmentReplacements(replacements, segment, whitelistWords, alreadyReplaced = null) {
+    const textLower = String(segment?.text || '').toLowerCase();
+    const selected = [];
+    const seen = new Set();
+
+    for (const r of replacements || []) {
+      const original = String(r?.original || '').trim();
+      if (!original) continue;
+      const lower = original.toLowerCase();
+      if (seen.has(lower)) continue;
+      if (whitelistWords?.has(lower)) continue;
+      if (alreadyReplaced?.has(lower)) continue;
+      if (!textLower.includes(lower)) continue;
+      seen.add(lower);
+      const position = textLower.indexOf(lower);
+      selected.push({
+        ...r,
+        original,
+        position: position >= 0 ? position : 0
+      });
+      if (selected.length >= getSegmentMaxReplacements(segment)) break;
+    }
+
+    return selected;
+  }
+
+  async function processBatchSegments(batch, whitelistWords) {
+    const segments = Array.isArray(batch) ? batch.filter(s => s?.element?.isConnected) : [];
+    if (segments.length === 0) return;
+
+    const activeSegments = [];
+    for (const segment of segments) {
+      if (segment.element.hasAttribute(PROCESSING_ATTR)) continue;
+      segment.element.setAttribute(PROCESSING_ATTR, 'true');
+      activeSegments.push(segment);
+    }
+
+    const finalize = (segment) => {
+      try { segment.element.removeAttribute(PROCESSING_ATTR); } catch {}
+      processedFingerprints.add(segment.fingerprint);
+      try { segment.element.setAttribute(SCANNED_ATTR, segment.fingerprint); } catch {}
+    };
+
+    try {
+      const candidates = [];
+      for (const segment of activeSegments) {
+        try {
+          const paragraphApplied = await maybeIntegrateParagraphTranslation(segment.element, segment.text, segment.fingerprint);
+          if (paragraphApplied) continue;
+          const sentenceApplied = await maybeIntegrateSentenceTranslations(segment.element, segment.fingerprint);
+          if (sentenceApplied) processedFingerprints.add(segment.fingerprint);
+          candidates.push(segment);
+        } catch (e) {
+          console.error('[VocabMeld] Segment pre-processing error:', e);
+        }
+      }
+
+      if (candidates.length === 0) return;
+
+      const combinedText = candidates.map(s => s.filteredText).join('\n\n---\n\n');
+      const baseMax = INTENSITY_CONFIG[config?.intensity]?.maxPerParagraph || 8;
+      const maxReplacementsOverride = Math.min(baseMax * candidates.length, 80);
+      const result = await translateText(combinedText, {
+        minTextLenForApi: 50,
+        maxReplacementsOverride
+      });
+
+      if (result.immediate?.length) {
+        for (const segment of candidates) {
+          const picked = pickSegmentReplacements(result.immediate, segment, whitelistWords);
+          if (picked.length === 0) continue;
+          applyReplacements(segment.element, picked);
+        }
+      }
+
+      if (result.async) {
+        result.async.then((asyncReplacements) => {
+          if (!asyncReplacements?.length) return;
+          for (const segment of candidates) {
+            if (!segment?.element?.isConnected) continue;
+            const alreadyReplaced = new Set();
+            segment.element.querySelectorAll('.vocabmeld-translated').forEach(el => {
+              const original = el.getAttribute('data-original');
+              if (original) alreadyReplaced.add(original.toLowerCase());
+            });
+            const picked = pickSegmentReplacements(asyncReplacements, segment, whitelistWords, alreadyReplaced);
+            if (picked.length === 0) continue;
+            applyReplacements(segment.element, picked);
+          }
+        }).catch((error) => {
+          console.error('[VocabMeld] Async translation error:', error);
+        });
+      }
+    } catch (e) {
+      console.error('[VocabMeld] Batch processing error:', e);
+    } finally {
+      for (const segment of activeSegments) finalize(segment);
+    }
+  }
+
   // 处理待处理的可见容器
   const processPendingContainers = debounce(async () => {
     if (isProcessing || pendingContainers.size === 0) return;
     if (document.hidden || !isTabActive) return;
+    if (!shouldProcessSite()) {
+      pendingContainers.clear();
+      return;
+    }
     
     isProcessing = true;
     
@@ -2500,13 +2951,28 @@ ${uncached.join(', ')}
         }
       }
 
-      // 分批处理
-      for (let i = 0; i < segments.length; i += MAX_CONCURRENT) {
-        const batch = segments.slice(i, i + MAX_CONCURRENT);
+      // 分批处理：合并段落减少 API 请求频率（仅对标准段落生效，避免影响短文本/评论场景）
+      const mergeable = [];
+      const individual = [];
+      for (const segment of segments) {
+        const canMerge =
+          segment.minTextLenForApi === 50 &&
+          segment.maxReplacementsCap === Infinity;
+        (canMerge ? mergeable : individual).push(segment);
+      }
+
+      for (let i = 0; i < mergeable.length; i += MAX_SEGMENTS_PER_REQUEST) {
+        const batch = mergeable.slice(i, i + MAX_SEGMENTS_PER_REQUEST);
+        await processBatchSegments(batch, whitelistWords);
+        if (i + MAX_SEGMENTS_PER_REQUEST < mergeable.length) {
+          await new Promise(resolve => setTimeout(resolve, REQUEST_INTERVAL_MS));
+        }
+      }
+
+      for (let i = 0; i < individual.length; i += MAX_CONCURRENT) {
+        const batch = individual.slice(i, i + MAX_CONCURRENT);
         await Promise.all(batch.map(segment => processSegmentAsync(segment, whitelistWords)));
-        
-        // 添加延迟，避免阻塞主线程
-        if (i + MAX_CONCURRENT < segments.length) {
+        if (i + MAX_CONCURRENT < individual.length) {
           await new Promise(resolve => setTimeout(resolve, PROCESS_DELAY_MS));
         }
       }
@@ -2600,6 +3066,7 @@ ${uncached.join(', ')}
   function observeTextContainers() {
     if (!intersectionObserver) return;
     if (document.hidden || !isTabActive) return;
+    if (!shouldProcessSite()) return;
     
     const containers = findTextContainers(document.body);
     let hasVisibleUnprocessed = false;
@@ -2641,16 +3108,7 @@ ${uncached.join(', ')}
     if (!config?.enabled) return { processed: 0, disabled: true };
 
     // 检查站点规则
-    const hostname = window.location.hostname;
-    if (config.siteMode === 'all') {
-      if (config.excludedSites?.some(domain => hostname.includes(domain))) {
-        return { processed: 0, excluded: true };
-      }
-    } else {
-      if (!config.allowedSites?.some(domain => hostname.includes(domain))) {
-        return { processed: 0, excluded: true };
-      }
-    }
+    if (!shouldProcessSite()) return { processed: 0, excluded: true };
 
     // 确保缓存已加载
     if (wordCache.size === 0) {
@@ -2823,7 +3281,172 @@ ${uncached.join(', ')}
     `;
   }
 
-  function showTooltip(element) {
+  function getLangFamily(code) {
+    const c = String(code || '').toLowerCase();
+    if (c.startsWith('zh')) return 'zh';
+    return c;
+  }
+
+  function isWordInConfiguredTargetLanguage(word) {
+    if (!word) return false;
+    const family = getLangFamily(config?.targetLanguage);
+    if (!family) return false;
+    return detectLanguage(word) === family;
+  }
+
+  function pickExplainWord(original, translation) {
+    if (isWordInConfiguredTargetLanguage(original)) return original;
+    if (isWordInConfiguredTargetLanguage(translation)) return translation;
+    return translation || original || '';
+  }
+
+  function getExplainToggleIconSvg(nextMode, size = 16) {
+    const s = Number(size) || 16;
+    // Book icon for dict, sparkle icon for ai.
+    if (nextMode === 'dict') {
+      return `
+        <svg viewBox="0 0 24 24" width="${s}" height="${s}" aria-hidden="true">
+          <path fill="currentColor" d="M18 2H7a3 3 0 0 0-3 3v15a2 2 0 0 0 2 2h12v-2H6V5a1 1 0 0 1 1-1h11v8h2V4a2 2 0 0 0-2-2z"/>
+          <path fill="currentColor" d="M20 14H8a2 2 0 0 0-2 2v6h14a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2zm0 6H8v-4h12v4z"/>
+        </svg>
+      `;
+    }
+    return `
+      <svg viewBox="0 0 24 24" width="${s}" height="${s}" aria-hidden="true">
+        <path fill="currentColor" d="M12 2l1.9 6.6L20.5 10l-6.6 1.9L12 18.5l-1.9-6.6L3.5 10l6.6-1.4L12 2z"/>
+        <path fill="currentColor" d="M5 20l.9-3 3-.9-3-.9L5 12l-.9 3-3 .9 3 .9L5 20z"/>
+      </svg>
+    `;
+  }
+
+  function updateExplainToggleButton(button, currentMode) {
+    if (!button) return;
+    const nextMode = currentMode === 'ai' ? 'dict' : 'ai';
+    button.dataset.nextMode = nextMode;
+    button.title = nextMode === 'dict' ? '切换到词典解释' : '切换到 AI 解释';
+    button.innerHTML = getExplainToggleIconSvg(nextMode, 16);
+  }
+
+  function startTooltipWordQueryStream(queryWord, queryKey) {
+    if (!queryWord || !queryKey) return;
+    let hasStructuredUpdate = false;
+
+    const stream = prefetchWordQueryStreaming(queryWord, {
+      onPartialData: (partial) => {
+        hasStructuredUpdate = true;
+        if (!tooltip || tooltip.style.display !== 'block') return;
+        if (tooltip.dataset.wordQueryKey !== queryKey) return;
+        const liveContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+        if (!liveContainer) return;
+        liveContainer.innerHTML = buildTooltipQueryHtmlData(partial, { statusText: '生成中…', isPartial: true });
+      },
+      onRawText: (text) => {
+        if (hasStructuredUpdate) return;
+        if (!tooltip || tooltip.style.display !== 'block') return;
+        if (tooltip.dataset.wordQueryKey !== queryKey) return;
+        const liveContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+        if (!liveContainer) return;
+        liveContainer.innerHTML = buildTooltipQueryHtmlStreaming(text);
+      }
+    });
+
+    activeWordQueryStream = { key: queryKey, cancel: stream.cancel };
+
+    stream.promise.then((data) => {
+      if (!tooltip || tooltip.style.display !== 'block') return;
+      if (tooltip.dataset.wordQueryKey !== queryKey) return;
+      const finalContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+      if (finalContainer) finalContainer.innerHTML = buildTooltipQueryHtmlData(data);
+    }).catch((err) => {
+      if (!tooltip || tooltip.style.display !== 'block') return;
+      if (tooltip.dataset.wordQueryKey !== queryKey) return;
+      const errorContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+      if (errorContainer) errorContainer.innerHTML = buildTooltipQueryHtmlError(err?.message || String(err));
+    });
+  }
+
+  function ensureTooltipDictionaryLoaded() {
+    if (!tooltip || tooltip.style.display !== 'block') return;
+    const dictContainer = tooltip.querySelector('.vocabmeld-tooltip-dict');
+    if (!dictContainer) return;
+    const dictWord = tooltip.dataset.dictWord || '';
+    if (!dictWord) {
+      dictContainer.innerHTML = buildTooltipDictHtmlEmpty('');
+      return;
+    }
+    if (detectLanguage(dictWord) !== 'en') {
+      dictContainer.innerHTML = buildTooltipDictHtmlUnsupported(dictWord);
+      return;
+    }
+
+    const dictionaryType = config?.dictionaryType || 'zh-en';
+    const cacheKey = `${dictWord.toLowerCase()}_${dictionaryType}`;
+    tooltip.dataset.dictCacheKey = cacheKey;
+
+    if (dictCache.has(cacheKey)) {
+      const cached = dictCache.get(cacheKey);
+      dictContainer.innerHTML = cached ? buildTooltipDictHtmlData(cached) : buildTooltipDictHtmlEmpty(dictWord);
+      return;
+    }
+
+    dictContainer.innerHTML = buildTooltipDictHtmlLoading(dictWord);
+    fetchDictionaryData(dictWord).then((dictData) => {
+      if (!tooltip || tooltip.style.display !== 'block') return;
+      if (tooltip.dataset.dictCacheKey !== cacheKey) return;
+      dictContainer.innerHTML = dictData ? buildTooltipDictHtmlData(dictData) : buildTooltipDictHtmlEmpty(dictWord);
+    }).catch((err) => {
+      if (!tooltip || tooltip.style.display !== 'block') return;
+      if (tooltip.dataset.dictCacheKey !== cacheKey) return;
+      dictContainer.innerHTML = buildTooltipDictHtmlError(dictWord, err?.message || String(err));
+    });
+  }
+
+  function ensureTooltipAiLoaded() {
+    if (!tooltip || tooltip.style.display !== 'block') return;
+    const queryContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+    if (!queryContainer) return;
+    const queryWord = tooltip.dataset.wordQueryWord || '';
+    const queryKey = tooltip.dataset.wordQueryKey || '';
+
+    if (!config?.enableWordQuery) {
+      queryContainer.innerHTML = buildTooltipQueryHtmlDisabled();
+      return;
+    }
+    if (!config?.queryApiEndpoint || !config?.queryModelName) {
+      queryContainer.innerHTML = buildTooltipQueryHtmlNotConfigured();
+      return;
+    }
+    if (queryKey && wordQueryCache.get(queryKey)?.data) {
+      queryContainer.innerHTML = buildTooltipQueryHtmlData(wordQueryCache.get(queryKey).data);
+      return;
+    }
+    if (!queryKey) {
+      queryContainer.innerHTML = buildTooltipQueryHtmlError('无效单词');
+      return;
+    }
+
+    queryContainer.innerHTML = buildTooltipQueryHtmlLoading();
+    startTooltipWordQueryStream(queryWord, queryKey);
+  }
+
+  function setTooltipExplainMode(mode) {
+    if (!tooltip) return;
+    const aiContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
+    const dictContainer = tooltip.querySelector('.vocabmeld-tooltip-dict');
+    if (!aiContainer || !dictContainer) return;
+
+    const next = mode === 'dict' ? 'dict' : 'ai';
+    tooltipExplainMode = next;
+    tooltip.dataset.explainMode = next;
+    aiContainer.style.display = next === 'ai' ? 'block' : 'none';
+    dictContainer.style.display = next === 'dict' ? 'block' : 'none';
+    updateExplainToggleButton(tooltip.querySelector('.vocabmeld-btn-explain-toggle'), next);
+
+    if (next === 'dict') ensureTooltipDictionaryLoaded();
+    else ensureTooltipAiLoaded();
+  }
+
+  function showTooltip(element, mouseX = null, mouseY = null) {
     if (!tooltip || !element.classList?.contains('vocabmeld-translated')) return;
 
     const original = element.getAttribute('data-original');
@@ -2837,7 +3460,8 @@ ${uncached.join(', ')}
       String(w.word || '').toLowerCase() === originalLower
     );
 
-    const queryWord = normalizeWordQueryText(translation);
+    const explainWord = pickExplainWord(original, translation);
+    const queryWord = normalizeWordQueryText(explainWord);
     const queryKey = makeWordQueryCacheKey(queryWord);
     tooltip.dataset.wordQueryKey = queryKey;
     tooltip.dataset.wordQueryWord = queryWord;
@@ -2848,8 +3472,6 @@ ${uncached.join(', ')}
     }
 
     let queryInnerHtml = '';
-    let shouldFetchQuery = false;
-
     if (!config?.enableWordQuery) {
       queryInnerHtml = buildTooltipQueryHtmlDisabled();
     } else if (!config?.queryApiEndpoint || !config?.queryModelName) {
@@ -2858,9 +3480,31 @@ ${uncached.join(', ')}
       queryInnerHtml = buildTooltipQueryHtmlData(wordQueryCache.get(queryKey).data);
     } else if (queryKey) {
       queryInnerHtml = buildTooltipQueryHtmlLoading();
-      shouldFetchQuery = true;
     } else {
       queryInnerHtml = buildTooltipQueryHtmlError('无效单词');
+    }
+
+    const dictWord = normalizeWordQueryText(explainWord);
+    const dictCacheKey = dictWord ? `${dictWord.toLowerCase()}_${config?.dictionaryType || 'zh-en'}` : '';
+    tooltip.dataset.dictWord = dictWord;
+    tooltip.dataset.dictCacheKey = dictCacheKey;
+
+    let dictInnerHtml = '';
+    if (!dictWord) {
+      dictInnerHtml = buildTooltipDictHtmlEmpty('');
+    } else if (detectLanguage(dictWord) !== 'en') {
+      dictInnerHtml = buildTooltipDictHtmlUnsupported(dictWord);
+    } else if (dictCacheKey && dictCache.has(dictCacheKey)) {
+      const cached = dictCache.get(dictCacheKey);
+      dictInnerHtml = cached ? buildTooltipDictHtmlData(cached) : buildTooltipDictHtmlEmpty(dictWord);
+    } else {
+      dictInnerHtml = buildTooltipDictHtmlLoading(dictWord);
+    }
+
+    let initialExplainMode = tooltipExplainMode;
+    if (initialExplainMode !== 'dict') initialExplainMode = 'ai';
+    if (initialExplainMode === 'ai' && (!config?.enableWordQuery || !config?.queryApiEndpoint || !config?.queryModelName)) {
+      initialExplainMode = 'dict';
     }
 
     tooltip.innerHTML = `
@@ -2870,8 +3514,11 @@ ${uncached.join(', ')}
       </div>
       ${phonetic && config.showPhonetic ? `<div class="vocabmeld-tooltip-phonetic">${escapeHtml(phonetic)}</div>` : ''}
       <div class="vocabmeld-tooltip-original">原文: ${escapeHtml(original)}</div>
-      <div class="vocabmeld-tooltip-query">${queryInnerHtml}</div>
+      <div class="vocabmeld-tooltip-query" style="display: ${initialExplainMode === 'ai' ? 'block' : 'none'};">${queryInnerHtml}</div>
+      <div class="vocabmeld-tooltip-dict" style="display: ${initialExplainMode === 'dict' ? 'block' : 'none'};">${dictInnerHtml}</div>
       <div class="vocabmeld-tooltip-actions">
+        <button class="vocabmeld-tooltip-btn vocabmeld-btn-explain-toggle" title="">
+        </button>
         <button class="vocabmeld-tooltip-btn vocabmeld-btn-speak" data-original="${escapeHtml(original)}" data-translation="${escapeHtml(translation)}" title="发音">
           <svg viewBox="0 0 24 24" width="16" height="16">
             <path fill="currentColor" d="M14,3.23V5.29C16.89,6.15 19,8.83 19,12C19,15.17 16.89,17.84 14,18.7V20.77C18,19.86 21,16.28 21,12C21,7.72 18,4.14 14,3.23M16.5,12C16.5,10.23 15.5,8.71 14,7.97V16C15.5,15.29 16.5,13.76 16.5,12M3,9V15H7L12,20V4L7,9H3Z"/>
@@ -2898,54 +3545,63 @@ ${uncached.join(', ')}
       </div>
     `;
 
-    positionTooltipForElement(element);
+    positionTooltipForElement(element, mouseX, mouseY);
     tooltip.style.display = 'block';
     activeTooltipTarget = element;
 
-    if (shouldFetchQuery && queryWord) {
-      let hasStructuredUpdate = false;
-      const stream = prefetchWordQueryStreaming(queryWord, {
-        onPartialData: (partial) => {
-          hasStructuredUpdate = true;
-          if (!tooltip || tooltip.style.display !== 'block') return;
-          if (tooltip.dataset.wordQueryKey !== queryKey) return;
-          const liveContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
-          if (!liveContainer) return;
-          liveContainer.innerHTML = buildTooltipQueryHtmlData(partial, { statusText: '生成中…', isPartial: true });
-        },
-        onRawText: (text) => {
-          if (hasStructuredUpdate) return;
-          if (!tooltip || tooltip.style.display !== 'block') return;
-          if (tooltip.dataset.wordQueryKey !== queryKey) return;
-          const liveContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
-          if (!liveContainer) return;
-          liveContainer.innerHTML = buildTooltipQueryHtmlStreaming(text);
-        }
-      });
-
-      activeWordQueryStream = { key: queryKey, cancel: stream.cancel };
-
-      stream.promise.then((data) => {
-        if (!tooltip || tooltip.style.display !== 'block') return;
-        if (tooltip.dataset.wordQueryKey !== queryKey) return;
-        const finalContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
-        if (finalContainer) finalContainer.innerHTML = buildTooltipQueryHtmlData(data);
-      }).catch((err) => {
-        if (!tooltip || tooltip.style.display !== 'block') return;
-        if (tooltip.dataset.wordQueryKey !== queryKey) return;
-        const errorContainer = tooltip.querySelector('.vocabmeld-tooltip-query');
-        if (errorContainer) errorContainer.innerHTML = buildTooltipQueryHtmlError(err?.message || String(err));
-      });
-    }
+    updateExplainToggleButton(tooltip.querySelector('.vocabmeld-btn-explain-toggle'), initialExplainMode);
+    setTooltipExplainMode(initialExplainMode);
   }
 
-  function positionTooltipForElement(element) {
+  function positionTooltipForElement(element, mouseX = null, mouseY = null) {
     if (!tooltip || !element?.getBoundingClientRect) return;
-    const rect = element.getBoundingClientRect();
-    const left = rect.left + window.scrollX;
-    const top = rect.bottom + window.scrollY + 5;
-    tooltip.style.left = `${left}px`;
-    tooltip.style.top = `${top}px`;
+    let posLeft;
+    let posTop;
+
+    try {
+      if (typeof mouseX === 'number' && typeof mouseY === 'number' && typeof document.caretRangeFromPoint === 'function') {
+        const caretRange = document.caretRangeFromPoint(mouseX, mouseY);
+        if (caretRange && element.contains(caretRange.startContainer)) {
+          const tempRange = document.createRange();
+          tempRange.setStart(caretRange.startContainer, caretRange.startOffset);
+          tempRange.setEnd(caretRange.startContainer, caretRange.startOffset);
+          const caretRect = tempRange.getBoundingClientRect();
+
+          const textNode = caretRange.startContainer;
+          if (textNode?.nodeType === Node.TEXT_NODE) {
+            let lineStartOffset = 0;
+            for (let i = caretRange.startOffset; i >= 0; i--) {
+              tempRange.setStart(textNode, i);
+              tempRange.setEnd(textNode, Math.min(textNode.length, i + 1));
+              const charRect = tempRange.getBoundingClientRect();
+              if (Math.abs(charRect.top - caretRect.top) > 5) {
+                lineStartOffset = i + 1;
+                break;
+              }
+              lineStartOffset = i;
+            }
+            tempRange.setStart(textNode, lineStartOffset);
+            tempRange.setEnd(textNode, Math.min(textNode.length, lineStartOffset + 1));
+            const lineStartRect = tempRange.getBoundingClientRect();
+            posLeft = lineStartRect.left;
+            posTop = caretRect.bottom;
+          } else {
+            posLeft = caretRect.left;
+            posTop = caretRect.bottom;
+          }
+        }
+      }
+    } catch {}
+
+    if (posLeft === undefined || posTop === undefined) {
+      const rect = element.getBoundingClientRect();
+      posLeft = rect.left;
+      posTop = rect.bottom;
+      if (typeof mouseY === 'number') posTop = Math.max(posTop, mouseY + 10);
+    }
+
+    tooltip.style.left = `${posLeft + window.scrollX}px`;
+    tooltip.style.top = `${posTop + window.scrollY + 2}px`;
   }
 
   function refreshTooltipPosition() {
@@ -2994,7 +3650,7 @@ ${uncached.join(', ')}
         if (tooltip) tooltip.dataset.wordQueryKey = '';
         if (tooltip) tooltip.dataset.wordQueryWord = '';
         activeWordQueryStream = null;
-      }, 150);
+      }, 200);
     }
   }
   
@@ -3044,7 +3700,9 @@ ${uncached.join(', ')}
       if (e.relatedTarget && target.contains(e.relatedTarget)) return;
       if (!config?.enableWordQuery) return;
 
-      const word = target.getAttribute('data-translation') || '';
+      const original = target.getAttribute('data-original') || '';
+      const translation = target.getAttribute('data-translation') || '';
+      const word = pickExplainWord(original, translation);
       const key = makeWordQueryCacheKey(word);
       if (!key) return;
 
@@ -3086,8 +3744,19 @@ ${uncached.join(', ')}
       if (retryBtn) {
         e.preventDefault();
         e.stopPropagation();
-        const word = retryBtn.getAttribute('data-word') || tooltip?.dataset?.wordQueryWord || (activeTooltipTarget?.getAttribute?.('data-translation') || '');
+        const fallbackOriginal = activeTooltipTarget?.getAttribute?.('data-original') || '';
+        const fallbackTranslation = activeTooltipTarget?.getAttribute?.('data-translation') || '';
+        const word = retryBtn.getAttribute('data-word') || tooltip?.dataset?.wordQueryWord || pickExplainWord(fallbackOriginal, fallbackTranslation);
         forceRetryWordQuery(word);
+        return;
+      }
+
+      const explainToggleBtn = e.target.closest?.('.vocabmeld-btn-explain-toggle');
+      if (explainToggleBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const nextMode = explainToggleBtn.dataset.nextMode || (tooltipExplainMode === 'ai' ? 'dict' : 'ai');
+        setTooltipExplainMode(nextMode);
         return;
       }
 
@@ -3135,6 +3804,16 @@ ${uncached.join(', ')}
               <path fill="currentColor" d="M12,21.35L10.55,20.03C5.4,15.36 2,12.27 2,8.5C2,5.41 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.08C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.41 22,8.5C22,12.27 18.6,15.36 13.45,20.03L12,21.35Z"/>
             </svg>
           `;
+        } else {
+          removeFromMemorizeList(original);
+          memorizeBtn.classList.remove('active');
+          memorizeBtn.title = '添加到记忆列表';
+          // 更新图标为镂空
+          memorizeBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" width="16" height="16">
+              <path fill="currentColor" d="M12.1,18.55L12,18.65L11.89,18.55C7.14,14.24 4,11.39 4,8.5C4,6.5 5.5,5 7.5,5C9.04,5 10.54,6 11.07,7.36H12.93C13.46,6 14.96,5 16.5,5C18.5,5 20,6.5 20,8.5C20,11.39 16.86,14.24 12.1,18.55M16.5,3C14.76,3 13.09,3.81 12,5.08C10.91,3.81 9.24,3 7.5,3C4.42,3 2,5.41 2,8.5C2,12.27 5.4,15.36 10.55,20.03L12,21.35L13.45,20.03C18.6,15.36 22,12.27 22,8.5C22,5.41 19.58,3 16.5,3Z"/>
+            </svg>
+          `;
         }
         return;
       }
@@ -3168,7 +3847,7 @@ ${uncached.join(', ')}
         if (tooltip?.style.display === 'block' && activeTooltipTarget === target) {
           hideTooltip(true);
         } else {
-          showTooltip(target);
+          showTooltip(target, e.clientX, e.clientY);
         }
         return;
       }

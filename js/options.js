@@ -62,6 +62,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 行为设置
     autoProcess: document.getElementById('autoProcess'),
     showPhonetic: document.getElementById('showPhonetic'),
+    dictionaryType: document.getElementById('dictionaryType'),
     showAddMemorize: document.getElementById('showAddMemorize'),
     cacheMaxSizeRadios: document.querySelectorAll('input[name="cacheMaxSize"]'),
     translationStyleRadios: document.querySelectorAll('input[name="translationStyle"]'),
@@ -495,6 +496,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       elements.autoProcess.checked = result.autoProcess ?? false;
       elements.showPhonetic.checked = result.showPhonetic ?? true;
       elements.showAddMemorize.checked = result.showAddMemorize ?? true;
+      if (elements.dictionaryType) {
+        elements.dictionaryType.value = result.dictionaryType || 'zh-en';
+      }
 
       const cacheMaxSize = result.cacheMaxSize || 2000;
       elements.cacheMaxSizeRadios.forEach(radio => {
@@ -844,6 +848,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       processMode: document.querySelector('input[name="processMode"]:checked')?.value || 'both',
       autoProcess: elements.autoProcess.checked,
       showPhonetic: elements.showPhonetic.checked,
+      dictionaryType: elements.dictionaryType?.value || 'zh-en',
       showAddMemorize: elements.showAddMemorize.checked,
       cacheMaxSize: parseInt(document.querySelector('input[name="cacheMaxSize"]:checked').value),
       translationStyle: document.querySelector('input[name="translationStyle"]:checked').value,
@@ -901,6 +906,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 下拉框 - 改变时保存
     elements.nativeLanguage.addEventListener('change', () => debouncedSave(200));
+    if (elements.dictionaryType) {
+      elements.dictionaryType.addEventListener('change', () => debouncedSave(200));
+    }
     if (elements.wordQueryDefinitionDisplay) {
       elements.wordQueryDefinitionDisplay.addEventListener('change', () => debouncedSave(200));
     }
@@ -1417,6 +1425,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           intensity: syncData.intensity,
           autoProcess: syncData.autoProcess,
           showPhonetic: syncData.showPhonetic,
+          dictionaryType: syncData.dictionaryType,
           showAddMemorize: syncData.showAddMemorize,
           cacheMaxSize: syncData.cacheMaxSize,
           translationStyle: syncData.translationStyle,

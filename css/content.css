@@ -381,6 +381,93 @@
   line-height: 1.2 !important;
 }
 
+.vocabmeld-tooltip .vocabmeld-tooltip-dict {
+  margin-top: 10px !important;
+  padding-top: 10px !important;
+  border-top: 1px solid #334155 !important;
+}
+
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-dict {
+  border-top: 1px solid #e2e8f0 !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-dict-title {
+  font-size: 11px !important;
+  color: #94a3b8 !important;
+  margin-bottom: 6px !important;
+  letter-spacing: 0.3px !important;
+  text-transform: uppercase !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-dict-word {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: #e2e8f0 !important;
+  margin-bottom: 6px !important;
+  word-break: break-word !important;
+}
+
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-dict-word {
+  color: #1e293b !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-tooltip-dict-phonetic {
+  color: #94a3b8 !important;
+  font-size: 13px !important;
+  margin-bottom: 6px !important;
+  font-style: italic !important;
+  padding: 0 !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-dict-loading,
+.vocabmeld-tooltip .vocabmeld-dict-empty {
+  color: #64748b !important;
+  font-style: italic !important;
+  text-align: center !important;
+  padding: 4px 0 !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-dict-entry {
+  margin-bottom: 6px !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-dict-entry:last-child {
+  margin-bottom: 0 !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-dict-pos {
+  display: inline-block !important;
+  background: #475569 !important;
+  color: #e2e8f0 !important;
+  padding: 1px 6px !important;
+  border-radius: 3px !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  text-transform: lowercase !important;
+  margin-bottom: 4px !important;
+}
+
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-dict-pos {
+  background: #e2e8f0 !important;
+  color: #475569 !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-dict-defs {
+  margin: 4px 0 0 16px !important;
+  padding: 0 !important;
+  list-style: disc !important;
+}
+
+.vocabmeld-tooltip .vocabmeld-dict-defs li {
+  color: #94a3b8 !important;
+  margin-bottom: 2px !important;
+  line-height: 1.4 !important;
+}
+
+.vocabmeld-tooltip[data-theme="light"] .vocabmeld-dict-defs li {
+  color: #64748b !important;
+}
+
 .vocabmeld-tooltip .vocabmeld-tooltip-tip {
   font-size: 11px !important;
   color: #64748b !important;
