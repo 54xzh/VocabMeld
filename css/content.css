@@ -479,9 +479,9 @@
 .vocabmeld-tooltip .vocabmeld-tooltip-actions {
   display: flex !important;
   gap: 8px !important;
-  padding-top: 10px !important;
-  border-top: 1px solid #334155 !important;
-  margin-top: 8px !important;
+  padding-bottom: 10px !important;
+  border-bottom: 1px solid #334155 !important;
+  margin-bottom: 8px !important;
 }
 
 .vocabmeld-tooltip .vocabmeld-tooltip-btn {
@@ -525,7 +525,7 @@
 
 /* Light theme button styles */
 .vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-actions {
-  border-top: 1px solid #e2e8f0 !important;
+  border-bottom: 1px solid #e2e8f0 !important;
 }
 
 .vocabmeld-tooltip[data-theme="light"] .vocabmeld-tooltip-btn {

@@ -3512,10 +3512,6 @@ ${uncached.join(', ')}
         <span class="vocabmeld-tooltip-word">${escapeHtml(translation)}</span>
         <span class="vocabmeld-tooltip-badge">${escapeHtml(difficulty)}</span>
       </div>
-      ${phonetic && config.showPhonetic ? `<div class="vocabmeld-tooltip-phonetic">${escapeHtml(phonetic)}</div>` : ''}
-      <div class="vocabmeld-tooltip-original">原文: ${escapeHtml(original)}</div>
-      <div class="vocabmeld-tooltip-query" style="display: ${initialExplainMode === 'ai' ? 'block' : 'none'};">${queryInnerHtml}</div>
-      <div class="vocabmeld-tooltip-dict" style="display: ${initialExplainMode === 'dict' ? 'block' : 'none'};">${dictInnerHtml}</div>
       <div class="vocabmeld-tooltip-actions">
         <button class="vocabmeld-tooltip-btn vocabmeld-btn-explain-toggle" title="">
         </button>
@@ -3543,6 +3539,10 @@ ${uncached.join(', ')}
           </svg>
         </button>
       </div>
+      ${phonetic && config.showPhonetic ? `<div class="vocabmeld-tooltip-phonetic">${escapeHtml(phonetic)}</div>` : ''}
+      <div class="vocabmeld-tooltip-original">原文: ${escapeHtml(original)}</div>
+      <div class="vocabmeld-tooltip-query" style="display: ${initialExplainMode === 'ai' ? 'block' : 'none'};">${queryInnerHtml}</div>
+      <div class="vocabmeld-tooltip-dict" style="display: ${initialExplainMode === 'dict' ? 'block' : 'none'};">${dictInnerHtml}</div>
     `;
 
     positionTooltipForElement(element, mouseX, mouseY);
